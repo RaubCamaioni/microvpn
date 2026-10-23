@@ -200,18 +200,23 @@
 
   function renderAdmin(admin) {
     var pending = admin.members.filter(function (m) { return !m.approved; });
-    el.requests.hidden = pending.length === 0;
+    el.requests.hidden = false;
     el["request-list"].innerHTML = "";
-    pending.forEach(function (m) {
-      var li = document.createElement("li");
-      var who = span(m.name + " ");
-      who.appendChild(span("from " + (m.joined_ip || "?") + (m.location ? " (" + m.location + ")" : "") + " ", "addr"));
-      who.appendChild(link("[accept]", function () { adminAction("POST", "/members/" + m.id + "/approve"); }));
-      who.appendChild(document.createTextNode(" "));
-      who.appendChild(link("[reject]", function () { adminAction("DELETE", "/members/" + m.id); }));
-      li.appendChild(span("?"));
-      li.appendChild(who);
-      el["request-list"].appendChild(li);
+    if (!pending.length) {
+      var none = document.createElement("div");
+      none.className = "branch dim";
+      none.textContent = "└── no pending requests";
+      el["request-list"].appendChild(none);
+    }
+    pending.forEach(function (m, i) {
+      var row = document.createElement("div");
+      row.className = "branch";
+      row.appendChild(span(i === pending.length - 1 ? "└── " : "├── ", "dim connector"));
+      row.appendChild(span(m.name));
+      row.appendChild(span("· from " + (m.joined_ip || "?") + (m.location ? " (" + m.location + ")" : ""), "dim"));
+      row.appendChild(link("[accept]", function () { adminAction("POST", "/members/" + m.id + "/approve"); }));
+      row.appendChild(link("[reject]", function () { adminAction("DELETE", "/members/" + m.id); }));
+      el["request-list"].appendChild(row);
     });
     // a [remove] beside every accepted member in the members list
     var accepted = {};

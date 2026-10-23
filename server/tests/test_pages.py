@@ -52,8 +52,9 @@ def test_room_page_and_gone_page(client):
     assert 'id="peers-legend"' not in page and "relay sees" not in page
     assert 'data-tab=' not in page
     assert "join.sh" not in page and "| sh" not in page
-    assert 'id="requests"' in page and "accept" in page.lower()
-    assert "locations are approximate" in page and "db-ip.com" in page
+    assert 'id="requests"' in page and "pending requests/" in page and "no pending requests" in page
+    assert "locations are approximate" not in page and "accept connects" not in page
+    assert "db-ip.com" in page  # the licence's attribution link, in the note at the bottom
     assert 'id="extend-form"' in page and 'name="lifetime"' in page
     assert 'id="admin-bar"' in page and "[ADMIN]" in page and 'id="expires"' in page
     assert page.index('class="title"') < page.index('id="expires"') < page.index('id="member-count"') < page.index('id="room-link"')

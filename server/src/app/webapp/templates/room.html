@@ -75,13 +75,11 @@
 </div>
 <p id="platform-hint" class="dim"></p>
 
-<section id="requests" hidden>
-  <h2>asking to join</h2>
-  <p class="dim">you created this room, so you decide who gets in. accept connects the device to everyone already in;
-     reject removes it.</p>
-  <ul id="request-list"></ul>
-  <p class="dim">locations are approximate: <a href="https://db-ip.com">IP Geolocation by DB-IP</a></p>
-</section>
+{# devices waiting for the admin, as a tree; shown to the admin even when empty #}
+<div id="requests" class="tree" {% if not is_admin %}hidden{% endif %}>
+  <div class="root">pending requests/</div>
+  <div id="request-list"><div class="branch dim">└── no pending requests</div></div>
+</div>
 
 <section id="peers">
   <h2>members</h2>
@@ -89,7 +87,7 @@
 </section>
 
 <p class="dim notice">the server never sees a private key or a decrypted packet; it sees names, public keys,
-your public IP address and traffic timing.</p>
+your public IP address and traffic timing. <a href="https://db-ip.com">IP Geolocation by DB-IP</a>.</p>
 {% endblock %}
 {% block scripts %}
 <script src="{{ root_path }}/static/vendor/nacl-fast.min.js"></script>
