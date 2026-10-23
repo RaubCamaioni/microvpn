@@ -37,7 +37,7 @@ form { margin: 1rem 0; display: flex; flex-wrap: wrap; gap: 1rem 2ch; align-item
 label { display: inline-flex; gap: 1ch; align-items: baseline; color: var(--dim); }
 input, select {
   font: inherit; color: var(--paper); background: var(--ink);
-  border: 0; border-bottom: 1px solid var(--line); padding: 0 0.25ch; min-width: 12ch;
+  border: 0; border-bottom: 1px solid var(--line); padding: 0 0.25ch; min-width: 6ch;
 }
 input:focus, select:focus { outline: none; border-bottom-color: var(--paper); }
 select option { background: var(--ink); }
@@ -94,4 +94,12 @@ details[open] summary { margin-bottom: 0.5rem; }
 .tree .branch .connector { white-space: pre; }
 .ok { color: #4ade80; }
 .bad { color: #f87171; }
-#new-profile form { margin: 0; display: inline-flex; flex-wrap: wrap; gap: 0.25rem 1ch; }
+#new-profile form { margin: 0; display: inline-flex; flex-wrap: wrap; gap: 0 1ch; align-items: baseline; }
+/* the tree's rows share one line height so the connectors join; the form row's controls fit that line */
+.tree .branch { line-height: 1.6; gap: 0 1ch; }
+.tree .branch form label { display: inline-flex; gap: 0.5ch; }
+.tree .branch form input { padding: 0; line-height: 1.6; height: 1.6em; min-width: 0; }
+.tree .branch form button { padding: 0 0.15rem; line-height: 1.6; }
+#profile-error:not([hidden]) { margin: 0 0 0 4ch; }
+#profile-error[hidden] { display: none; }
+.stale { display: inline; border-left: 0; padding-left: 0; }

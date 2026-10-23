@@ -155,9 +155,8 @@
       } else {
         var peers = view.peers.length + " peer" + (view.peers.length === 1 ? "" : "s");
         row.appendChild(span("· " + p.address + " · " + peers + (p.privateKey ? "" : " · key kept elsewhere"), "dim"));
-        if (p.downloadedHash && p.downloadedHash !== view.peers_hash) {
-          row.appendChild(span("(members changed: import again)", "stale"));
-        }
+        var note = staleNote(p, view);
+        if (note) row.appendChild(span(note, "stale"));
         row.appendChild(link("[download]", function () { downloadProfile(p); }, "the .conf file for the WireGuard app"));
         row.appendChild(link("[copy]", function () { copyProfile(p); }, "the config text to the clipboard"));
         row.appendChild(link("[QR]", function () { memory.selected = i; save(); render(); showProfileQr(p); }, "scan with the phone app"));
@@ -344,9 +343,21 @@
   // -- actions on the selected profile ---------------------------------------------------------
   function markDownloaded(p) {
     var view = views[p.memberToken];
-    if (view) { p.downloadedHash = view.peers_hash; save(); }
+    if (view) {
+      p.downloadedHash = view.peers_hash;
+      p.downloadedKeys = view.peers.map(function (peer) { return peer.public_key; });
+      save();
+    }
     lastSignature = null;
     renderProfiles();
+  }
+  // a new member means the imported file cannot reach it: import again. A member that left only leaves
+  // a dead [Peer] block behind, which WireGuard ignores: importing again is optional tidy-up.
+  function staleNote(p, view) {
+    if (!p.downloadedHash || p.downloadedHash === view.peers_hash) return "";
+    var had = p.downloadedKeys || [];
+    var added = view.peers.some(function (peer) { return had.indexOf(peer.public_key) < 0; });
+    return added ? "(new member: import again to reach them)" : "(a member left: import again when convenient)";
   }
   function saveBlob(text, filename, type) {
     var blob = new Blob([text], { type: type });
