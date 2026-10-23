@@ -32,6 +32,8 @@ class Room(SQLModel, table=True):
     owner_token: str
     # the browser that created the room: its admin, alongside the owner token
     visitor_id: str = Field(default="", index=True)
+    # the lifetime chosen at creation (hours); [extend] starts it again from now
+    lifetime_hours: int = 1
 
 
 class Member(SQLModel, table=True):
@@ -76,6 +78,7 @@ def create_db_and_tables(engine: Engine) -> None:
 _ADDED_COLUMNS = {
     "room": [
         ("visitor_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("lifetime_hours", "INTEGER NOT NULL DEFAULT 1"),
     ],
     "member": [
         ("approved", "BOOLEAN NOT NULL DEFAULT 0"),

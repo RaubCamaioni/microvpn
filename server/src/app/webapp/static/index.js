@@ -47,9 +47,33 @@
     });
   });
 
-  // "ends 21:30 UTC" becomes "ends in 58m" in the reader's clock
-  document.querySelectorAll("[data-expires-at]").forEach(function (el) {
-    var left = Math.max(0, Math.floor((new Date(el.dataset.expiresAt) - Date.now()) / 60000));
-    el.textContent = left >= 60 ? "in " + Math.floor(left / 60) + "h " + (left % 60) + "m" : "in " + left + "m";
+  // [extend] beside a room this browser created: starts its lifetime again from now
+  document.querySelectorAll("a[data-extend]").forEach(function (a) {
+    a.addEventListener("click", async function (event) {
+      event.preventDefault();
+      var res = await fetch(root + "/r/" + a.dataset.extend + "/extend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (res.ok) {
+        var json = await res.json();
+        var clock = a.parentNode.querySelector("[data-expires-at]");
+        if (clock) clock.dataset.expiresAt = json.expires_at;
+      } else {
+        a.textContent = "[extend failed]";
+      }
+    });
   });
+
+  // "ends 21:30 UTC" becomes a live "ends in 58m 12s" in the reader's clock
+  function tick() {
+    document.querySelectorAll("[data-expires-at]").forEach(function (el) {
+      var left = Math.max(0, Math.floor((new Date(el.dataset.expiresAt) - Date.now()) / 1000));
+      var h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+      el.textContent = left === 0 ? "now" : "in " + (h ? h + "h " : "") + m + "m " + s + "s";
+    });
+  }
+  tick();
+  setInterval(tick, 1000);
 })();

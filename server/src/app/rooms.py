@@ -123,6 +123,7 @@ class MyRoom:
     expires_at: datetime
     is_admin: bool
     devices: list[str]  # the names this browser joined as
+    lifetime_hours: int = 1
 
 
 @dataclass(frozen=True)
@@ -208,7 +209,7 @@ class RoomService:
                 rooms[room.id] = room
                 devices.setdefault(room.id, []).append(member.name)
             return [
-                MyRoom(r.id, r.name, r.expires_at, r.visitor_id == visitor_id, devices.get(r.id, []))
+                MyRoom(r.id, r.name, r.expires_at, r.visitor_id == visitor_id, devices.get(r.id, []), r.lifetime_hours)
                 for r in sorted(rooms.values(), key=lambda r: r.created_at, reverse=True)
             ]
 
@@ -242,6 +243,7 @@ class RoomService:
                 expires_at=now + timedelta(hours=lifetime_hours),
                 owner_token=keys.new_token(),
                 visitor_id=visitor_id or "",
+                lifetime_hours=lifetime_hours,
             )
             s.add(room)
             s.commit()
@@ -274,6 +276,20 @@ class RoomService:
                 max_members=self.settings.ROOM_MAX_MEMBERS,
                 members=[MemberPublic(m.id, m.name, m.address, m.public_key, m.approved) for m in members],
             )
+
+    def extend(self, room_id: str, owner_token: str | None, lifetime_hours: int | None, visitor_id: str = "") -> datetime:
+        """Start the room's lifetime again from now: its own, or a chosen one. Admin only."""
+        with self._session() as s:
+            room = self._admin_room(s, room_id, owner_token, visitor_id)
+            hours = lifetime_hours if lifetime_hours is not None else room.lifetime_hours
+            if hours not in self.settings.ROOM_LIFETIMES:
+                choices = ", ".join(str(h) for h in self.settings.ROOM_LIFETIMES)
+                raise Invalid(f"lifetime must be one of {choices} hours")
+            room.expires_at = self.now() + timedelta(hours=hours)
+            room.lifetime_hours = hours
+            s.add(room)
+            s.commit()
+            return room.expires_at
 
     def end_room(self, room_id: str, owner_token: str | None, visitor_id: str = "") -> None:
         with self._session() as s:

@@ -21,14 +21,16 @@ def unprefixed(page):
 def test_index_is_just_the_title_and_the_rooms_list(client):
     page = client.get("/").text
     assert "<h1>microvpn</h1>" in page and "your rooms" in page  # the list is always there
+    assert "end-to-end encrypted" in page.lower() and "share" in page.lower()
+    assert "ends on its own" not in page and "how it works" not in page and "limits" not in page
     assert 'name="lifetime"' in page and "<option" in page and "1 hour" in page and "24 hours" in page
-    assert 'id="new-room"' in page and "[create]" in page  # the new-room row sits inside the list
-    for gone in ("how it works", "what the server sees", "limits", "wg genkey"):
-        assert gone not in page
-    assert "no rooms yet" in page
+    assert 'id="new-room"' in page and "[create]" in page
+    assert page.index('id="new-room"') < page.index("no rooms yet")  # the create row comes first
     room = client.post("/rooms", json={"name": "game night", "lifetime_hours": 1}).json()
     page = client.get("/").text
     assert "game night" in page and "no rooms yet" not in page and f'data-delete="{room["id"]}"' in page
+    assert page.index('id="new-room"') < page.index("game night")
+    assert f'data-extend="{room["id"]}"' in page
 
 
 def test_room_page_and_gone_page(client):
@@ -39,6 +41,7 @@ def test_room_page_and_gone_page(client):
     assert 'name="public_key"' in page and "wg genkey | tee private.key | wg pubkey" in page
     assert "Import tunnel(s) from file" in page and "Scan from QR code" in page
     assert 'id="requests"' in page and "accept" in page.lower()
+    assert 'id="extend-form"' in page and 'name="lifetime"' in page
     assert "approximate location" in page and "db-ip.com" in page
     assert "vendor/nacl-fast.min.js" in page and "vendor/qrcode.js" in page
     gone = client.get("/r/" + "z" * 26)

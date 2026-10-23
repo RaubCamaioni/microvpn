@@ -308,3 +308,16 @@ async def test_admin_view_shows_alias_address_and_location(svc):
     assert [m.id for m in view.members] == [a.id, b.id]
     # the public view never carries addresses or places
     assert not hasattr(svc.room_view(r.id).members[0], "joined_ip")
+
+
+def test_extend_resets_the_lifetime_from_now_for_the_admin_only(svc, clock):
+    r = svc.create_room("", 4, "ip")
+    clock.t += timedelta(hours=3)
+    with pytest.raises(Unauthorized):
+        svc.extend(r.id, "wrong", None)
+    with pytest.raises(Invalid):
+        svc.extend(r.id, r.owner_token, 5)
+    assert svc.extend(r.id, r.owner_token, None) == clock.t + timedelta(hours=4)  # the room's own lifetime
+    assert svc.extend(r.id, r.owner_token, 1) == clock.t + timedelta(hours=1)  # or a chosen one
+    assert svc.room_view(r.id).expires_at == clock.t + timedelta(hours=1)
+    assert svc.rooms_of_visitor("")  == []
