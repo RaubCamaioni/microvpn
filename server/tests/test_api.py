@@ -44,7 +44,8 @@ def test_join_state_me_leave_end(client):
     assert bob["approved"] is False
     state = client.get(f"/r/{room['id']}/state").json()
     assert [(m["name"], m["approved"]) for m in state["members"]] == [("alice", True), ("bob", False)]
-    assert all("id" in m for m in state["members"]) and state["max_members"] == 8
+    assert all("id" in m and m["active"] is False and m["bytes"] == 0 for m in state["members"])
+    assert state["max_members"] == 8
     auth = {"Authorization": "Bearer " + j.json()["member_token"]}
     bob_auth = {"Authorization": "Bearer " + bob["member_token"]}
     waiting = client.get(f"/r/{room['id']}/me", headers=bob_auth).json()

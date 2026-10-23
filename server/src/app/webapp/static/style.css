@@ -66,7 +66,8 @@ summary::-webkit-details-marker { display: none; }
 summary:hover { background: var(--paper); color: var(--ink); }
 details[open] summary { margin-bottom: 0.5rem; }
 #peer-list { list-style: none; padding: 0; }
-#peer-list li { display: grid; grid-template-columns: 2ch 1fr; column-gap: 1ch; }
+#peer-list li { display: block; }
+#peer-list li.connected { color: #4ade80; }
 #peer-list li .addr { color: var(--dim); }
 .notice { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 0.5rem; font-size: 0.9rem; }
 #new-room { margin: 1.5rem 0; }
@@ -91,3 +92,6 @@ details[open] summary { margin-bottom: 0.5rem; }
 #new-profile form { margin: 0; }
 .tree .branch.selected > a:first-of-type { background: var(--paper); color: var(--ink); }
 .tree .branch .connector { white-space: pre; }
+.ok { color: #4ade80; }
+.bad { color: #f87171; }
+#new-profile form { margin: 0; display: inline-flex; flex-wrap: wrap; gap: 0.25rem 1ch; }

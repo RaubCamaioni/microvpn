@@ -16,7 +16,7 @@
 
   var el = {};
   ["expires", "member-count", "copy-link", "link-qr", "room-link", "profile-form", "profile-error", "profile-list",
-   "platform-hint", "peer-list", "peers-legend", "end-room", "requests", "request-list", "extend-form", "admin-bar",
+   "platform-hint", "peer-list", "end-room", "requests", "request-list", "extend-form", "admin-bar",
    "overlay", "overlay-close", "overlay-qr", "overlay-caption"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
 
@@ -168,28 +168,34 @@
     });
   }
 
+  function formatBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+    return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+  }
+
   function renderMembers(state) {
-    var p = selected();
-    var view = p && views[p.memberToken];
     var accepted = state.members.filter(function (m) { return m.approved; });
     el["member-count"].textContent = accepted.length;
     el["peer-list"].innerHTML = "";
-    var marks = {};
-    if (view && view.approved) view.peers.forEach(function (peer) { marks[peer.public_key] = peer.slots_active; });
     state.members.forEach(function (m) {
       var li = document.createElement("li");
       li.dataset.key = m.public_key;
-      var mark = document.createElement("span");
-      var active = marks[m.public_key];
-      mark.textContent = !m.approved ? "?" : active === undefined ? "·" : active >= 2 ? "●" : active === 1 ? "◐" : "○";
-      if (active !== undefined) mark.title = ["relay sees neither side", "relay sees one side", "relay sees both sides"][active] || "";
+      li.className = m.approved && m.active ? "connected" : "";
       var text = span(m.name + " ");
-      text.appendChild(span(m.approved ? m.address : "(waiting for the admin)", "addr"));
-      li.appendChild(mark);
+      text.appendChild(span(m.approved ? m.address + " " : "(waiting for the admin) ", "addr"));
+      if (m.approved) {
+        if (accepted.length < 2) {
+          text.appendChild(span("waiting for a peer", "dim"));
+        } else {
+          text.appendChild(span(m.active ? "Connected" : "Disconnected", m.active ? "ok" : "bad"));
+          text.appendChild(span(" · " + formatBytes(m.bytes), "dim"));
+        }
+      }
       li.appendChild(text);
       el["peer-list"].appendChild(li);
     });
-    el["peers-legend"].hidden = !(view && view.approved && view.peers.length);
   }
 
   function renderAdmin(admin) {

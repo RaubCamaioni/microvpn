@@ -52,22 +52,26 @@ def _mac1_key(pubkey_b64: str) -> bytes:
     return hashlib.blake2s(b"mac1----" + base64.b64decode(pubkey_b64), digest_size=32).digest()
 
 
-def mac1_valid(data: bytes, keys: PairKeys) -> bool:
-    """Whether a handshake message carries the mac1 a real WireGuard peer computes for one of the
-    pair's public keys: mac1 = keyed_blake2s(blake2s("mac1----" || receiver_pubkey), msg[:-32])[:16].
-    The relay cannot tell which member is the receiver, so either key is accepted. Only a client that
-    has a member's public key, which the room link gives, can produce it: junk never claims a slot."""
+def mac1_receiver(data: bytes, keys: PairKeys) -> int | None:
+    """Which of the pair's members a handshake message is addressed to (0 or 1), or None when its
+    mac1 matches neither: mac1 = keyed_blake2s(blake2s("mac1----" || receiver_pubkey), msg[:-32])[:16],
+    as a real WireGuard peer computes it. Only a client that has a member's public key, which the room
+    link gives, can produce it: junk never claims a slot. The sender is the other member."""
     if packet_kind(data) not in (HANDSHAKE_INITIATION, HANDSHAKE_RESPONSE):
-        return False
+        return None
     body, mac1 = data[:-32], data[-32:-16]
-    for key in keys:
+    for index, key in enumerate(keys):
         try:
             expected = hashlib.blake2s(body, digest_size=16, key=_mac1_key(key)).digest()
         except (ValueError, TypeError):
             continue
         if hmac.compare_digest(expected, mac1):
-            return True
-    return False
+            return index
+    return None
+
+
+def mac1_valid(data: bytes, keys: PairKeys) -> bool:
+    return mac1_receiver(data, keys) is not None
 
 
 class TokenBucket:
@@ -95,6 +99,7 @@ class TokenBucket:
 class Slot:
     addr: tuple
     last_seen: float
+    member: int  # 0 or 1: which of the pair's members sends from this address
 
 
 class PairPort(asyncio.DatagramProtocol):
@@ -114,6 +119,7 @@ class PairPort(asyncio.DatagramProtocol):
         self.global_bucket = global_bucket
         self.clock = clock
         self.slots: list[Slot] = []
+        self.bytes_from = [0, 0]  # ciphertext bytes each member has sent through this port
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport):
@@ -127,15 +133,19 @@ class PairPort(asyncio.DatagramProtocol):
         sender = next((s for s in self.slots if s.addr == addr), None)
         if sender is not None:
             sender.last_seen = now
-        elif not mac1_valid(data, self.keys):
-            return  # an address that holds no slot claims one only with a handshake for this pair
-        elif len(self.slots) < 2:
-            sender = Slot(addr, now)
-            self.slots.append(sender)
         else:
-            # a genuine handshake from a new address: the client roamed; it takes over the stalest slot
-            sender = min(self.slots, key=lambda s: s.last_seen)
-            sender.addr, sender.last_seen = addr, now
+            receiver = mac1_receiver(data, self.keys)
+            if receiver is None:
+                return  # an address that holds no slot claims one only with a handshake for this pair
+            member = 1 - receiver
+            if len(self.slots) < 2:
+                sender = Slot(addr, now, member)
+                self.slots.append(sender)
+            else:
+                # a genuine handshake from a new address: the client roamed; it takes over the stalest slot
+                sender = min(self.slots, key=lambda s: s.last_seen)
+                sender.addr, sender.last_seen, sender.member = addr, now, member
+        self.bytes_from[sender.member] += len(data)
         other = next((s for s in self.slots if s is not sender), None)
         if other is None or self.transport is None:
             return
@@ -145,6 +155,15 @@ class PairPort(asyncio.DatagramProtocol):
     def active_slots(self, window: float) -> int:
         now = self.clock()
         return sum(1 for s in self.slots if now - s.last_seen <= window)
+
+    def member_stats(self, window: float) -> dict[str, tuple[bool, int]]:
+        """Per public key: whether that member sent anything within `window` seconds, and its bytes so far."""
+        now = self.clock()
+        stats = {}
+        for index, key in enumerate(self.keys):
+            active = any(s.member == index and now - s.last_seen <= window for s in self.slots)
+            stats[key] = (active, self.bytes_from[index])
+        return stats
 
 
 class Relay:
@@ -208,6 +227,12 @@ class Relay:
     def slots_active(self, port: int, window: float = 30.0) -> int:
         entry = self._ports.get(port)
         return entry[1].active_slots(window) if entry else 0
+
+    def member_stats(self, port: int, window: float = 40.0) -> dict[str, tuple[bool, int]]:
+        """{public key: (sent within the window, bytes sent)} for the pair on `port`; {} for an unknown port.
+        The window covers WireGuard's 25-second keepalive, so an active tunnel is always 'sending'."""
+        entry = self._ports.get(port)
+        return entry[1].member_stats(window) if entry else {}
 
     def ports_in_use(self) -> int:
         return len(self._ports)

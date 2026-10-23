@@ -198,3 +198,24 @@ async def test_close_from_another_thread_releases_the_port_on_the_loop():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(("127.0.0.1", 30008))  # free again
     s.close()
+
+
+async def test_member_stats_attribute_traffic_to_the_member_that_sent_it():
+    t = [100.0]
+    relay = Relay(relay_settings(), clock=lambda: t[0])
+    await relay.open(30010, "room", (KA, KB))
+    assert relay.member_stats(30010) == {KA: (False, 0), KB: (False, 0)}
+    a, b = udp_client(), udp_client()
+    a.sendto(handshake(1, KB), ("127.0.0.1", 30010))  # mac1 for B's key: the sender is A
+    await asyncio.sleep(0.05)
+    assert relay.member_stats(30010) == {KA: (True, 148), KB: (False, 0)}
+    b.sendto(handshake(2, KA), ("127.0.0.1", 30010))  # mac1 for A's key: the sender is B
+    await recv(a)
+    a.sendto(make_packet(4, 200), ("127.0.0.1", 30010))
+    await recv(b)
+    stats = relay.member_stats(30010)
+    assert stats[KA] == (True, 348) and stats[KB] == (True, 92)
+    t[0] = 150.0  # 50 s later nobody has sent: both idle, the counts stay
+    assert relay.member_stats(30010, window=40.0) == {KA: (False, 348), KB: (False, 92)}
+    assert relay.member_stats(30099) == {}
+    relay.close(30010)
