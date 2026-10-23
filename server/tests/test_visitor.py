@@ -46,7 +46,7 @@ def test_home_page_lists_the_rooms_of_this_browser_and_deletes_them(client):
     token = client.get("/", headers=ip).cookies[COOKIE]
     me = {**ip}
     client.cookies.set(COOKIE, token)
-    assert "your rooms" not in client.get("/", headers=me).text
+    assert "no rooms yet" in client.get("/", headers=me).text  # the list is always shown
     mine = client.post("/rooms", json={"name": "game night", "lifetime_hours": 1}, headers=me).json()
     # a room someone else (another browser, another address) created, which this browser joined
     other_browser = TestClient(client.app)
