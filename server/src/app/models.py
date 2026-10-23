@@ -64,6 +64,14 @@ class Pair(SQLModel, table=True):
     port: int = Field(unique=True)
 
 
+class RetiredPort(SQLModel, table=True):
+    """A relay port a pair of this room once used. A device that was removed still points at it, so it
+    is never handed to another pair while the room lives; it is freed when the room ends."""
+
+    port: int = Field(primary_key=True)
+    room_id: str = Field(index=True)
+
+
 def make_engine(database: str) -> Engine:
     return create_engine(f"sqlite:///{database}", connect_args={"check_same_thread": False})
 

@@ -18,7 +18,7 @@ from sqlalchemy import Engine, func
 from sqlmodel import Session, delete, select
 
 from app import keys
-from app.models import Member, Pair, Room, Visitor, utcnow
+from app.models import Member, Pair, RetiredPort, Room, Visitor, utcnow
 
 VISITOR_COOKIE_DAYS = 30
 VISITOR_FORGET_DAYS = 60
@@ -445,7 +445,8 @@ class RoomService:
             if member.approved:
                 return
             others = [m for m in self._members(s, room) if m.approved and m.id != member.id]
-            used_ports = set(s.exec(select(Pair.port)).all())
+            # ports in use anywhere, and ports retired by any live room: a removed device still points at those
+            used_ports = set(s.exec(select(Pair.port)).all()) | set(s.exec(select(RetiredPort.port)).all())
         opened: list[tuple[int, int]] = []  # (other member id, port)
         try:
             for other in others:
@@ -521,6 +522,7 @@ class RoomService:
         for pair in self._pairs_of(s, room, member):
             self.relay.close(pair.port)
             s.delete(pair)
+            s.add(RetiredPort(port=pair.port, room_id=room.id))  # never reused while the room lives
         s.delete(member)
 
     # -- helpers ------------------------------------------------------------------------------
@@ -566,5 +568,6 @@ class RoomService:
     def _delete_room(self, s: Session, room: Room) -> None:
         self.relay.close_room(room.id)
         s.exec(delete(Pair).where(Pair.room_id == room.id))
+        s.exec(delete(RetiredPort).where(RetiredPort.room_id == room.id))
         s.exec(delete(Member).where(Member.room_id == room.id))
         s.delete(room)

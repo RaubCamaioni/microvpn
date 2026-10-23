@@ -335,3 +335,30 @@ async def test_room_view_reports_connection_and_transfer_per_member(svc):
     assert view == {"a": (True, 1024), "b": (True, 50), "c": (False, 0)}  # summed over a member's pairs
     d = await svc.join(r.id, "d", KEY(4))  # pending: no pairs, nothing to report
     assert [(m.name, m.active, m.bytes) for m in svc.room_view(r.id).members][-1] == ("d", False, 0)
+
+
+async def test_released_ports_are_retired_until_the_room_ends(tmp_path, clock):
+    s = service(tmp_path, clock, "retire.db", RELAY_PORT_RANGE="30000-30002")  # three ports in all
+    r = s.create_room("", 1, "ip")
+    a = await admit(s, r, "a", KEY(1))
+    b = await admit(s, r, "b", KEY(2))
+    first = set(s.relay.opened)
+    s.remove_member(r.id, r.owner_token, b.id)  # frees the (a, b) port: a kicked device still points at it
+    assert s.relay.opened == {}
+    c = await admit(s, r, "c", KEY(3))
+    assert not (set(s.relay.opened) & first)  # the (a, c) pair got a different port
+    with pytest.raises(ServerFull):  # (a, d) and (c, d) need two ports; one unretired port is left
+        await admit(s, r, "d", KEY(4))
+    # a second service on the same database (a restart) still refuses the retired port
+    s2 = RoomService(s.engine, s.settings, FakeRelay(), now=lambda: clock.t, locate=fake_locate)
+    await s2.restore()
+    s2.remove_member(r.id, r.owner_token, c.id)  # a second retired port
+    e = await s2.join(r.id, "e", KEY(5), owner_token=r.owner_token)  # (a, e) takes the one port left
+    assert set(s2.relay.opened) == {30000, 30001, 30002} - first - {next(iter(set(s2.relay.closed)))}
+    with pytest.raises(ServerFull):  # (a, f) and (e, f): nothing left, retired ports stay retired
+        await s2.join(r.id, "f", KEY(6), owner_token=r.owner_token)
+    s2.end_room(r.id, r.owner_token)
+    r2 = s2.create_room("", 1, "ip")  # the room ended: its retired ports are free again
+    await s2.join(r2.id, "p", KEY(7), owner_token=r2.owner_token)
+    await s2.join(r2.id, "q", KEY(8), owner_token=r2.owner_token)
+    assert len([p for p, room in s2.relay.opened.items() if room == r2.id]) == 1

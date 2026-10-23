@@ -219,3 +219,25 @@ async def test_member_stats_attribute_traffic_to_the_member_that_sent_it():
     assert relay.member_stats(30010, window=40.0) == {KA: (False, 348), KB: (False, 92)}
     assert relay.member_stats(30099) == {}
     relay.close(30010)
+
+
+async def test_takeover_replaces_only_the_claimed_members_slot():
+    t = [100.0]
+    relay = Relay(relay_settings(), clock=lambda: t[0])
+    await relay.open(30011, "room", (KA, KB))
+    a, b, x = udp_client(), udp_client(), udp_client()
+    b.sendto(handshake(2, KA), ("127.0.0.1", 30011))  # B claims its slot first
+    t[0] = 101.0
+    a.sendto(handshake(1, KB), ("127.0.0.1", 30011))  # then A: B's slot is now the stalest
+    await recv(b)
+    t[0] = 102.0
+    x.sendto(handshake(1, KB), ("127.0.0.1", 30011))  # x claims to be A (addressed to B): it may replace A's slot only
+    assert await recv(b) == handshake(1, KB)
+    b.sendto(make_packet(4, 64), ("127.0.0.1", 30011))  # B's reply goes to the claimed A, which is now x
+    assert await recv(x) == make_packet(4, 64)
+    a.sendto(make_packet(4, 80), ("127.0.0.1", 30011))  # the real A lost its slot: dropped until it handshakes again
+    with pytest.raises(asyncio.TimeoutError):
+        await recv(b, 0.3)
+    stats = relay.member_stats(30011)
+    assert stats[KB][0] is True  # B was never displaced
+    relay.close(30011)
