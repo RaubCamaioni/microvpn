@@ -2,11 +2,14 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 
 from app.models import create_db_and_tables, make_engine
+from app.relay import Relay
+from app.rooms import RoomError, RoomService
 from app.routes import api, pages
 from app.settings import Settings
 from app.templating import WEBAPP
@@ -34,6 +37,8 @@ class NoStoreMiddleware:
 
 def create_app(settings: Settings, relay=None) -> FastAPI:
     engine = make_engine(settings.DATABASE)
+    relay = relay if relay is not None else Relay(settings)
+    rooms = RoomService(engine, settings, relay)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -44,6 +49,12 @@ def create_app(settings: Settings, relay=None) -> FastAPI:
     app.state.settings = settings
     app.state.relay = relay
     app.state.engine = engine
+    app.state.rooms = rooms
+
+    @app.exception_handler(RoomError)
+    async def room_error(request: Request, exc: RoomError):
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+
     app.add_middleware(NoStoreMiddleware)
     app.mount("/static", StaticFiles(directory=WEBAPP / "static"), name="static")
     app.include_router(api.router)
