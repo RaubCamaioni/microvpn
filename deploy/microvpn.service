@@ -1,0 +1,27 @@
+# systemd user unit of the `microvpn` host user: the web app and relay in one rootless container.
+# Installed by deploy/setup.sh into ~/.config/systemd/user/. IMAGE is localhost/microvpn:latest
+# (built on the server by build-on-server.sh) until Docker Hub publishing exists; then it becomes
+# docker.io/raubcamaioni/microvpn:latest and microvpn-update.timer keeps it current.
+[Unit]
+Description=microvpn web app and relay (rootless podman)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+Environment=IMAGE=localhost/microvpn:latest
+ExecStartPre=-/usr/bin/podman rm -f microvpn
+ExecStart=/usr/bin/podman run --rm --name microvpn \
+  --memory=256m --pids-limit=256 \
+  --read-only --tmpfs /tmp:rw,size=64m \
+  -p 172.18.0.1:8082:8080/tcp \
+  -p 20000-21999:20000-21999/udp \
+  --env-file %h/microvpn/.env \
+  -v %h/microvpn/data:/data \
+  ${IMAGE}
+ExecStop=/usr/bin/podman stop -t 10 microvpn
+
+[Install]
+WantedBy=default.target

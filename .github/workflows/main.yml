@@ -58,11 +58,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ secrets.DOCKER_USERNAME || 'local' }}/microvpn
-          # only two tags per release (latest and the version); a manual deploy is tagged with its commit
+          # only two tags per release (latest and the version); a manual deploy is tagged with its commit;
+          # a plain build (push or pull request) gets a `build` tag that is never pushed
           tags: |
             type=semver,pattern={{version}}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
             type=raw,value=latest,enable=${{ env.PUBLISH == 'true' }}
+            type=raw,value=build,enable=${{ env.PUBLISH != 'true' }}
 
       - name: Login to Docker Hub
         if: env.PUBLISH == 'true' && env.HAVE_HUB == 'true'
