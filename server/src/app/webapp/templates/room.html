@@ -21,7 +21,23 @@
     <button type="submit">[join]</button>
   </form>
   <p id="join-error" class="error" hidden></p>
-  <p class="dim">leave the public key empty and this browser makes the key for you; it never leaves this device.</p>
+  <p class="dim">leave the public key empty and this browser makes the key for you; it never leaves this device.
+     The room's admin (whoever created it) sees your alias, your IP address and its approximate location before
+     accepting you.</p>
+</section>
+
+<section id="pending" hidden>
+  <h2>waiting for the admin</h2>
+  <p>This device asked to join. The admin's browser must accept it before it gets a config; this page updates
+     by itself. <a href="#" id="cancel-join">[cancel]</a></p>
+</section>
+
+<section id="requests" hidden>
+  <h2>asking to join</h2>
+  <p class="dim">you created this room, so you decide who gets in. accept connects the device to everyone already in;
+     reject removes it.</p>
+  <ul id="request-list"></ul>
+  <p class="dim">locations are approximate: <a href="https://db-ip.com">IP Geolocation by DB-IP</a></p>
 </section>
 
 <section id="config" hidden>
@@ -39,7 +55,8 @@
   <h2>with the WireGuard app</h2>
   <ol>
     <li>Install WireGuard from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.</li>
-    <li>Join above with a name for this device, then get the config into the app:
+    <li>Join above with a name for this device and wait for the admin to accept it (the admin's own browser is
+      accepted at once), then get the config into the app:
       <span class="dim">Windows, macOS, Linux:</span> [download], then in the app <em>Add Tunnel → Import tunnel(s) from file</em>;
       <span class="dim">Android, iOS:</span> in the app <em>+ → Scan from QR code</em> and point it at the code above;
       <span class="dim">iPhone, iPad, Mac:</span> [add to WireGuard] saves a profile that installs through Settings.</li>
@@ -60,7 +77,7 @@
   <p class="dim" id="peers-legend" hidden>relay sees: ○ neither side · ◐ one side · ● both sides (last 30 s)</p>
 </section>
 
-<section id="owner" hidden><a href="#" id="end-room">[end room]</a></section>
+<section id="owner" hidden><p class="dim">admin: this browser created the room.</p><a href="#" id="end-room">[end room]</a></section>
 
 <p class="dim notice">the server never sees a private key or a decrypted packet; it sees names, public keys,
 your public IP address and traffic timing.</p>

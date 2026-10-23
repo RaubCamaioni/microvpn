@@ -31,6 +31,8 @@ def test_room_page_and_gone_page(client):
     assert "join.sh" not in page and "| sh" not in page  # the curl | sh path is gone
     assert 'name="public_key"' in page and "wg genkey | tee private.key | wg pubkey" in page
     assert "Import tunnel(s) from file" in page and "Scan from QR code" in page
+    assert 'id="requests"' in page and "accept" in page.lower()
+    assert "approximate location" in page and "db-ip.com" in page
     assert "vendor/nacl-fast.min.js" in page and "vendor/qrcode.js" in page
     gone = client.get("/r/" + "z" * 26)
     assert gone.status_code == 404 and "ended or never existed" in gone.text

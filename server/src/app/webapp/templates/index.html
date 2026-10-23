@@ -17,7 +17,8 @@ Members reach each other; nothing is routed to the internet. The room ends on it
 
 <h2>how it works</h2>
 <ol>
-  <li>Create a room and share its link. The link is the only credential: anyone who has it can join.</li>
+  <li>Create a room and share its link. Whoever creates it is the admin: every other device that asks to join
+    waits until the admin's browser accepts it, seeing its alias, IP address and approximate location.</li>
   <li>Each device makes its own WireGuard key, in the browser or with <code>wg genkey</code>, and sends only the public key.</li>
   <li>Download the config or scan the QR code with the WireGuard app. Members get 10.x.y.z addresses and talk to each other through the relay.</li>
   <li>When the time is up the room ends and nothing about it is kept.</li>

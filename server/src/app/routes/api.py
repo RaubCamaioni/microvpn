@@ -29,12 +29,19 @@ def client_ip(request: Request) -> str:
     return request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
 
 
-def bearer(request: Request) -> str:
+def bearer_or_none(request: Request) -> str | None:
     auth = request.headers.get("authorization", "")
     scheme, _, token = auth.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
-        raise Unauthorized()
+        return None
     return token.strip()
+
+
+def bearer(request: Request) -> str:
+    token = bearer_or_none(request)
+    if token is None:
+        raise Unauthorized()
+    return token
 
 
 @router.get("/healthz")
@@ -69,14 +76,36 @@ def room_state(room_id: str, request: Request):
 
 @router.post("/r/{room_id}/members", status_code=201)
 async def join_room(room_id: str, body: JoinRoom, request: Request):
-    member = await rooms(request).join(room_id, body.name, body.public_key)
-    return {"member_token": member.token, "address": member.address}
+    # the admin's own device sends the owner token and is accepted at once; everyone else waits
+    member = await rooms(request).join(
+        room_id, body.name, body.public_key, owner_token=bearer_or_none(request), client_ip=client_ip(request)
+    )
+    return {"member_token": member.token, "address": member.address, "approved": member.approved}
+
+
+@router.get("/r/{room_id}/admin")
+def admin_view(room_id: str, request: Request):
+    view = rooms(request).admin_view(room_id, bearer(request))
+    return {"members": [{**asdict(m), "created_at": m.created_at.isoformat()} for m in view.members]}
+
+
+@router.post("/r/{room_id}/members/{member_id}/approve", status_code=204)
+async def approve_member(room_id: str, member_id: int, request: Request):
+    await rooms(request).approve(room_id, bearer(request), member_id)
+    return Response(status_code=204)
+
+
+@router.delete("/r/{room_id}/members/{member_id}", status_code=204)
+def remove_member(room_id: str, member_id: int, request: Request):
+    rooms(request).remove_member(room_id, bearer(request), member_id)
+    return Response(status_code=204)
 
 
 @router.get("/r/{room_id}/me")
 def me(room_id: str, request: Request):
     view = rooms(request).member_view(room_id, bearer(request))
     return {
+        "approved": view.approved,
         "address": view.address,
         "config_template": view.config_template,
         "peers_hash": view.peers_hash,

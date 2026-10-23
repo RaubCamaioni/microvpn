@@ -66,6 +66,10 @@ class Unauthorized(RoomError):
     status, detail = 401, "bad or missing token"
 
 
+class MemberNotFound(RoomError):
+    status, detail = 404, "no such member in this room"
+
+
 class RelayPorts(Protocol):
     """What the service needs from app.relay.Relay (tests substitute a double)."""
 
@@ -82,9 +86,28 @@ class RelayPorts(Protocol):
 
 @dataclass(frozen=True)
 class MemberPublic:
+    id: int
     name: str
     address: str
     public_key: str
+    approved: bool
+
+
+@dataclass(frozen=True)
+class AdminMemberView:
+    id: int
+    name: str
+    address: str
+    public_key: str
+    approved: bool
+    joined_ip: str
+    location: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class AdminView:
+    members: list[AdminMemberView]
 
 
 @dataclass(frozen=True)
@@ -98,18 +121,27 @@ class RoomView:
 
 @dataclass(frozen=True)
 class MemberView:
+    approved: bool
     address: str
-    config_template: str
+    config_template: str  # "" while the member waits for the admin
     peers_hash: str
     peers: list[PeerView]
 
 
 class RoomService:
-    def __init__(self, engine: Engine, settings: Settings, relay: RelayPorts, now: Callable[[], datetime] = utcnow):
+    def __init__(
+        self,
+        engine: Engine,
+        settings: Settings,
+        relay: RelayPorts,
+        now: Callable[[], datetime] = utcnow,
+        locate: Callable[[str], str] | None = None,
+    ):
         self.engine = engine
         self.settings = settings
         self.relay = relay
         self.now = now
+        self.locate = locate or (lambda ip: "")
         # room creations per client address in the last hour; in memory, reset by a restart
         self._creations: dict[str, deque[datetime]] = {}
         # joins are serialised: each one reads the room, binds ports, then writes in one transaction
@@ -170,15 +202,45 @@ class RoomService:
                 name=room.name,
                 expires_at=room.expires_at,
                 max_members=self.settings.ROOM_MAX_MEMBERS,
-                members=[MemberPublic(m.name, m.address, m.public_key) for m in members],
+                members=[MemberPublic(m.id, m.name, m.address, m.public_key, m.approved) for m in members],
             )
 
     def end_room(self, room_id: str, owner_token: str) -> None:
         with self._session() as s:
-            room = self._live_room(s, room_id)
-            if not hmac.compare_digest(room.owner_token, owner_token or ""):
-                raise Unauthorized()
+            room = self._admin_room(s, room_id, owner_token)
             self._delete_room(s, room)
+            s.commit()
+
+    # -- the admin: the room's creator, holding the owner token ----------------------------------
+
+    def admin_view(self, room_id: str, owner_token: str) -> AdminView:
+        """Every device of the room with where it joined from: only the admin sees this."""
+        with self._session() as s:
+            room = self._admin_room(s, room_id, owner_token)
+            return AdminView(
+                members=[
+                    AdminMemberView(m.id, m.name, m.address, m.public_key, m.approved, m.joined_ip, m.location, m.created_at)
+                    for m in self._members(s, room)
+                ]
+            )
+
+    async def approve(self, room_id: str, owner_token: str, member_id: int) -> None:
+        """Accept a pending device: it gets a pair, and a relay port, with every accepted member."""
+        with self._session() as s:
+            room = self._admin_room(s, room_id, owner_token)
+            if s.get(Member, member_id) is None or s.get(Member, member_id).room_id != room.id:
+                raise MemberNotFound()
+        async with self._join_lock:
+            await self._connect_locked(room_id, member_id)
+
+    def remove_member(self, room_id: str, owner_token: str, member_id: int) -> None:
+        """Reject a pending device or kick an accepted one: its pairs close and its row goes."""
+        with self._session() as s:
+            room = self._admin_room(s, room_id, owner_token)
+            member = s.get(Member, member_id)
+            if member is None or member.room_id != room.id:
+                raise MemberNotFound()
+            self._drop_member(s, room, member)
             s.commit()
 
     def sweep(self) -> int:
@@ -219,51 +281,74 @@ class RoomService:
 
     # -- members ------------------------------------------------------------------------------
 
-    async def join(self, room_id: str, name: str, public_key: str) -> Member:
+    async def join(
+        self, room_id: str, name: str, public_key: str, owner_token: str | None = None, client_ip: str = ""
+    ) -> Member:
+        """Add a device to the room. It waits for the admin unless the join carries the owner token
+        (the admin's own device), in which case it is accepted at once. The address it joined from
+        and its approximate location are kept for the admin's decision."""
         clean = keys.clean_device_name(name)
         if clean is None:
             raise Invalid(f"device name: 1 to {keys.DEVICE_NAME_MAX} printable characters")
         if not keys.is_public_key(public_key):
             raise Invalid("public key: 44 base64 characters encoding 32 bytes")
         async with self._join_lock:
-            # 1. read: the room, its members, the ports in use (no write lock held across awaits)
             with self._session() as s:
-                room = self._live_room(s, room_id)
-                others = self._members(s, room)
-                if len(others) >= self.settings.ROOM_MAX_MEMBERS:
+                room = self._admin_room(s, room_id, owner_token) if owner_token is not None else self._live_room(s, room_id)
+                members = self._members(s, room)
+                if len(members) >= self.settings.ROOM_MAX_MEMBERS:  # pending devices hold a place too
                     raise RoomFull()
-                if any(m.public_key == public_key for m in others):
+                if any(m.public_key == public_key for m in members):
                     raise DuplicateKey()
-                address = self._free_address(room, others)
-                used_ports = set(s.exec(select(Pair.port)).all())
-            # 2. bind one relay port per pair; on any failure give every port back
-            opened: list[tuple[int, int]] = []  # (other member id, port)
-            try:
-                for other in others:
-                    port = await self._open_free_port(room.id, used_ports, (public_key, other.public_key))
-                    opened.append((other.id, port))
-                    used_ports.add(port)
-                # 3. write: the member and its pairs in one short transaction
-                with self._session() as s:
-                    member = Member(
-                        room_id=room.id,
-                        name=clean,
-                        public_key=public_key,
-                        address=address,
-                        token=keys.new_token(),
-                        created_at=self.now(),
-                    )
-                    s.add(member)
-                    s.flush()  # assigns member.id for the pairs
-                    for other_id, port in opened:
-                        a, b = sorted((member.id, other_id))
-                        s.add(Pair(room_id=room.id, member_a_id=a, member_b_id=b, port=port))
-                    s.commit()
-            except BaseException:
-                for _, port in opened:
-                    self.relay.close(port)
-                raise
+                member = Member(
+                    room_id=room.id,
+                    name=clean,
+                    public_key=public_key,
+                    address=self._free_address(room, members),
+                    token=keys.new_token(),
+                    created_at=self.now(),
+                    joined_ip=client_ip or "",
+                    location=self.locate(client_ip) if client_ip else "",
+                )
+                s.add(member)
+                s.commit()
+            if owner_token is not None:
+                await self._connect_locked(room.id, member.id)
+                member.approved = True
         return member
+
+    async def _connect_locked(self, room_id: str, member_id: int) -> None:
+        """Accept a member (caller holds the join lock): bind one relay port per accepted peer, then
+        write the pairs and the flag in one short transaction; any failure gives the ports back."""
+        with self._session() as s:
+            room = self._live_room(s, room_id)
+            member = s.get(Member, member_id)
+            if member is None or member.room_id != room.id:
+                raise MemberNotFound()
+            if member.approved:
+                return
+            others = [m for m in self._members(s, room) if m.approved and m.id != member.id]
+            used_ports = set(s.exec(select(Pair.port)).all())
+        opened: list[tuple[int, int]] = []  # (other member id, port)
+        try:
+            for other in others:
+                port = await self._open_free_port(room.id, used_ports, (member.public_key, other.public_key))
+                opened.append((other.id, port))
+                used_ports.add(port)
+            with self._session() as s:
+                for other_id, port in opened:
+                    a, b = sorted((member.id, other_id))
+                    s.add(Pair(room_id=room.id, member_a_id=a, member_b_id=b, port=port))
+                row = s.get(Member, member.id)
+                if row is None:
+                    raise MemberNotFound()  # removed while its ports were being bound
+                row.approved = True
+                s.add(row)
+                s.commit()
+        except BaseException:
+            for _, port in opened:
+                self.relay.close(port)
+            raise
 
     async def _open_free_port(self, room_id: str, used: set[int], pair_keys: tuple[str, str]) -> int:
         lo, hi = self.settings.RELAY_PORT_RANGE
@@ -287,7 +372,9 @@ class RoomService:
         with self._session() as s:
             room = self._live_room(s, room_id)
             me = self._member_by_token(s, room, token)
-            others = {m.id: m for m in self._members(s, room) if m.id != me.id}
+            if not me.approved:
+                return MemberView(approved=False, address=me.address, config_template="", peers_hash=peers_hash([]), peers=[])
+            others = {m.id: m for m in self._members(s, room) if m.id != me.id and m.approved}
             port_by_other: dict[int, int] = {}
             for pair in self._pairs_of(s, room, me):
                 other_id = pair.member_b_id if pair.member_a_id == me.id else pair.member_a_id
@@ -299,6 +386,7 @@ class RoomService:
             ]
             peers.sort(key=lambda p: (p.name, p.public_key))
             return MemberView(
+                approved=True,
                 address=me.address,
                 config_template=render_config(me.address, peers, self.settings.RELAY_HOST),
                 peers_hash=peers_hash(peers),
@@ -309,11 +397,14 @@ class RoomService:
         with self._session() as s:
             room = self._live_room(s, room_id)
             me = self._member_by_token(s, room, token)
-            for pair in self._pairs_of(s, room, me):
-                self.relay.close(pair.port)
-                s.delete(pair)
-            s.delete(me)
+            self._drop_member(s, room, me)
             s.commit()
+
+    def _drop_member(self, s: Session, room: Room, member: Member) -> None:
+        for pair in self._pairs_of(s, room, member):
+            self.relay.close(pair.port)
+            s.delete(pair)
+        s.delete(member)
 
     # -- helpers ------------------------------------------------------------------------------
 
@@ -323,6 +414,12 @@ class RoomService:
         room = s.get(Room, room_id)
         if room is None or room.expires_at <= self.now():
             raise RoomGone()
+        return room
+
+    def _admin_room(self, s: Session, room_id: str, owner_token: str | None) -> Room:
+        room = self._live_room(s, room_id)
+        if not hmac.compare_digest(room.owner_token, owner_token or ""):
+            raise Unauthorized()
         return room
 
     @staticmethod
