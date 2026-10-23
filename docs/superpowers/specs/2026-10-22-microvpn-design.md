@@ -223,12 +223,17 @@ Nothing runs on the host but podman. The app is one container under a new unpriv
 
 - **User** `microvpn`, created by `deploy/setup.sh` with linger enabled and a subordinate id
   range (verified in `/etc/subuid`, added if `useradd` did not).
-- **Networking**: rootless podman with `--network=host`. This is required rather than preferred:
-  rootless port forwarding rewrites every sender to one address (slirp4netns) or forwards a
-  2000-port range slowly, and the relay must see members' real source addresses. The container
-  binds HTTP on `HTTP_BIND=172.18.0.1:8082`, which only the Docker network may reach, and the
-  UDP range on all addresses. It runs with no added capabilities, as a non-root user inside the
-  container as well, capped at 256 MB and 256 pids.
+- **Networking**: rootless podman with its own network namespace and published ports, using
+  pasta (the default on the server's podman 5.7): `-p 172.18.0.1:8082:8080/tcp` for the web app,
+  reachable only from the Docker network where nginx runs, and `-p 20000-21999:20000-21999/udp`
+  for the relay. pasta preserves the real source address of inbound packets, which the relay
+  needs to tell the two sides of a pair apart; this was verified on the server with a rootless
+  echo container before the design was fixed (a packet from the owner's machine arrived inside
+  the container from the machine's public address and the reply came back from the published
+  port). Inside the container the app binds `HTTP_BIND=0.0.0.0:8080` and the UDP range on all
+  addresses. No host networking, no added capabilities, a non-root user inside the container,
+  capped at 256 MB and 256 pids. The 25-second WireGuard keepalive also keeps pasta's UDP flows
+  alive, so replies keep leaving from the pair's port.
 - **Units** in `/home/microvpn/.config/systemd/user/`, in the shape of the catalog's:
   `microvpn.service` (the `podman run`), `microvpn-update.service` and `.timer` (pull `latest`
   from Docker Hub every minute, restart only on a newer `org.opencontainers.image.revision`).
@@ -238,7 +243,7 @@ Nothing runs on the host but podman. The app is one container under a new unpriv
   switching to Docker Hub is a one-line change of `IMAGE=` in the unit and enabling the timer.
 - **Environment file** `/home/microvpn/microvpn/.env`: `DATABASE=/data/microvpn.db`,
   `ROOT_PATH=/microvpn`, `PUBLIC_URL=https://raubcamaioni.com/microvpn`,
-  `RELAY_HOST=raubcamaioni.com`, `HTTP_BIND=172.18.0.1:8082`, `RELAY_PORT_RANGE=20000-21999`,
+  `RELAY_HOST=raubcamaioni.com`, `HTTP_BIND=0.0.0.0:8080`, `RELAY_PORT_RANGE=20000-21999`,
   `ROOM_MBPS=50`. Data directory `/home/microvpn/microvpn/data`, mounted at `/data`.
 - **Firewall**: `ufw allow proto udp to any port 20000:21999` and
   `ufw allow from 172.18.0.0/16 to 172.18.0.1 port 8082 proto tcp`.
