@@ -14,9 +14,9 @@
 
   var el = {};
   ["expires", "member-count", "copy-link", "link-qr", "room-link", "join", "join-form", "join-error", "config", "peer-count",
-   "stale", "download", "copy", "config-qr", "leave", "config-text", "peer-list", "peers-legend", "owner", "end-room",
+   "stale", "download", "copy", "config-qr", "leave", "config-text", "peer-list", "peers-legend", "end-room",
    "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list", "extend-form",
-   "overlay", "overlay-close", "overlay-qr", "overlay-caption", "tab-terminal-help", "key-field"]
+   "overlay", "overlay-close", "overlay-qr", "overlay-caption", "tab-terminal-help", "key-field", "admin-bar"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
 
   // -- the QR overlay ----------------------------------------------------------------------------
@@ -430,7 +430,7 @@
   });
 
   // -- start -----------------------------------------------------------------------------------
-  if (isAdmin()) el.owner.hidden = false;
+  if (isAdmin()) el["admin-bar"].hidden = false;
   if (memory && memory.memberToken) { el.join.hidden = true; }
   setTab("browser");
   tick();

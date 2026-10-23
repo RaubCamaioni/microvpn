@@ -50,6 +50,9 @@ def test_room_page_and_gone_page(client):
     assert 'id="requests"' in page and "accept" in page.lower()
     assert "approximate location" in page and "db-ip.com" in page
     assert 'id="extend-form"' in page and 'name="lifetime"' in page
+    assert 'id="admin-bar"' in page and "[ADMIN]" in page and 'id="expires"' in page
+    assert page.index('class="title"') < page.index('id="expires"') < page.index('id="member-count"') < page.index('id="room-link"')
+    assert "this browser created the room" not in page
     assert "vendor/nacl-fast.min.js" in page and "vendor/qrcode.js" in page
     gone = client.get("/r/" + "z" * 26)
     assert gone.status_code == 404 and "ended or never existed" in gone.text
