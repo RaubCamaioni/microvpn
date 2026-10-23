@@ -53,7 +53,8 @@
       var qr = qrcode(0, "M");
       qr.addData(configText);
       qr.make();
-      el.qr.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 0, scalable: true });
+      // pixel-sized, not scalable: a 100%-wide SVG collapses inside the inline-block container
+      el.qr.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2 });
     } catch (e) {
       el.qr.textContent = "config too large for a QR code; use download";
     }
