@@ -351,13 +351,13 @@
     lastSignature = null;
     renderProfiles();
   }
-  // a new member means the imported file cannot reach it: import again. A member that left only leaves
-  // a dead [Peer] block behind, which WireGuard ignores: importing again is optional tidy-up.
+  // a new member means the imported file cannot reach it. A removed member is only truly gone once the
+  // file no longer lists its key: until then that device could still reach this one through the relay.
   function staleNote(p, view) {
     if (!p.downloadedHash || p.downloadedHash === view.peers_hash) return "";
     var had = p.downloadedKeys || [];
     var added = view.peers.some(function (peer) { return had.indexOf(peer.public_key) < 0; });
-    return added ? "(new member: import again to reach them)" : "(a member left: import again when convenient)";
+    return added ? "(new member: import again to reach them)" : "(a member was removed: import again so it can no longer reach you)";
   }
   function saveBlob(text, filename, type) {
     var blob = new Blob([text], { type: type });

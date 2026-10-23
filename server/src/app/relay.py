@@ -138,13 +138,14 @@ class PairPort(asyncio.DatagramProtocol):
             if receiver is None:
                 return  # an address that holds no slot claims one only with a handshake for this pair
             member = 1 - receiver
-            if len(self.slots) < 2:
+            # a handshake addressed to one member is a claim to be the other: it may take over that
+            # member's own slot (the client roamed, or an impostor with its key) and never the receiver's
+            sender = next((s for s in self.slots if s.member == member), None)
+            if sender is None:
                 sender = Slot(addr, now, member)
                 self.slots.append(sender)
             else:
-                # a genuine handshake from a new address: the client roamed; it takes over the stalest slot
-                sender = min(self.slots, key=lambda s: s.last_seen)
-                sender.addr, sender.last_seen, sender.member = addr, now, member
+                sender.addr, sender.last_seen = addr, now
         self.bytes_from[sender.member] += len(data)
         other = next((s for s in self.slots if s is not sender), None)
         if other is None or self.transport is None:
