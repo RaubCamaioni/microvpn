@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}microvpn{% endblock %}</title>
+  <link rel="stylesheet" href="{{ root_path }}/static/style.css?v={{ static_version }}">
+  {% block head %}{% endblock %}
+</head>
+<body data-root-path="{{ root_path }}">
+  <header>
+    <span class="prompt"><span class="dim">guest@microvpn</span>:{{ cwd | default('~') }}<span class="dim"> $</span></span>
+    <nav>
+      <a href="{{ root_path }}/">[home]</a>
+      <a href="https://github.com/RaubCamaioni/microvpn">[github]</a>
+    </nav>
+  </header>
+  <main {% block main_attrs %}{% endblock %}>
+    {% block content %}{% endblock %}
+  </main>
+  {# the release and commit this page was built from, pinned bottom-right #}
+  <a href="https://github.com/RaubCamaioni/microvpn/commit/{{ commit_sha }}" id="version-tag"
+     title="site version: release and git commit">v{{ app_version }}+{{ commit_sha[:7] }}</a>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,6 @@
+[Unit]
+Description=Pull the microvpn image from Docker Hub and restart on a newer revision
+
+[Service]
+Type=oneshot
+ExecStart=%h/microvpn/update.sh

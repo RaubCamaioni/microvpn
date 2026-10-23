@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "microvpn"
+version = "0.1.0"
+description = "Temporary WireGuard rooms: end-to-end encrypted virtual LANs through a blind relay."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115",
+    "sqlmodel>=0.0.24",
+    "uvloop>=0.21; sys_platform != 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27"]
+
+[project.scripts]
+microvpn = "app.runner:runner"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+app = ["webapp/**/*"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

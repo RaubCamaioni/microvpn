@@ -1,0 +1,14 @@
+.git/
+.github/
+.devcontainer/
+.superpowers/
+docs/
+deploy/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/*.egg-info/
+*.md
+*.db
+.env
+.secrets

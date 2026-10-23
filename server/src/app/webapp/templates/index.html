@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>microvpn</h1>
+<p>A temporary WireGuard room: a private LAN between the devices of the people who have the link.
+Members reach each other; nothing is routed to the internet. The room ends on its own.</p>
+
+<form id="create" autocomplete="off">
+  <label>name <input name="name" maxlength="40" placeholder="optional"></label>
+  <label>lifetime
+    <select name="lifetime">
+      {% for h in settings.ROOM_LIFETIMES %}<option value="{{ h }}">{{ h }} hour{{ '' if h == 1 else 's' }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">[create room]</button>
+  <p id="error" class="error" hidden></p>
+</form>
+
+<h2>how it works</h2>
+<ol>
+  <li>Create a room and share its link. The link is the only credential: anyone who has it can join.</li>
+  <li>Each device makes its own WireGuard key, in the browser or with <code>wg genkey</code>, and sends only the public key.</li>
+  <li>Download the config or scan the QR code with the WireGuard app. Members get 10.x.y.z addresses and talk to each other through the relay.</li>
+  <li>When the time is up the room ends and nothing about it is kept.</li>
+</ol>
+
+<h2>what the server sees</h2>
+<p>The server never holds a private key and is never a WireGuard peer. It forwards encrypted UDP between
+members and cannot read it. It does see room and device names, public keys, members' public IP addresses,
+and the size and timing of packets.</p>
+
+<h2>limits</h2>
+<p>{{ settings.ROOM_MAX_MEMBERS }} members per room; lifetimes of
+{% for h in settings.ROOM_LIFETIMES %}{{ h }}{{ ', ' if not loop.last else '' }}{% endfor %} hours;
+{{ settings.ROOM_MBPS | int }} Mbit/s per room through the relay; {{ settings.ROOM_CREATE_PER_IP_PER_HOUR }} rooms per address per hour.</p>
+{% endblock %}
+{% block scripts %}<script src="{{ root_path }}/static/index.js?v={{ static_version }}"></script>{% endblock %}
