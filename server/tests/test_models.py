@@ -26,4 +26,6 @@ def test_tables_round_trip(tmp_path):
         s.add(Pair(room_id="a" * 26, member_a_id=m.id, member_b_id=m.id, port=20000))
         s.commit()
         assert s.exec(select(Pair)).one().port == 20000
-    assert utcnow().tzinfo is None
+        # values come back aware, so they compare with utcnow() without surprises
+        assert s.exec(select(Room)).one().expires_at.tzinfo is not None
+    assert utcnow().tzinfo is not None

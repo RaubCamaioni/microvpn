@@ -1,6 +1,7 @@
 """The three tables: a room, its members, and the member pairs with their relay ports.
 
-Datetimes are naive UTC throughout (SQLite drops timezones); use utcnow().
+Datetimes are timezone-aware UTC throughout (SQLModel >= 0.0.48 stores them with their offset and
+rejects naive values); use utcnow().
 """
 
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from sqlmodel import Field, SQLModel, create_engine
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(timezone.utc)
 
 
 class Room(SQLModel, table=True):
