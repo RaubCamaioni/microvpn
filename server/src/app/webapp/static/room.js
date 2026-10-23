@@ -1,5 +1,7 @@
-// room page: generate the key here, join with the public key, assemble the config locally,
-// show it as text, download, QR and the shell line, and keep the member list live.
+// room page: this browser holds a list of profiles (devices) in the room. Each profile's key is made
+// here, or brought as a public key; the config is assembled locally and shown for the selected
+// profile as text, download, QR and (on Apple devices) a configuration profile. The admin's browser
+// accepts, rejects and removes devices, and extends or ends the room.
 (function () {
   "use strict";
   var main = document.getElementById("room");
@@ -13,11 +15,90 @@
   var POLL_MS = 5000;
 
   var el = {};
-  ["expires", "member-count", "copy-link", "link-qr", "room-link", "join", "join-form", "join-error", "config", "peer-count",
-   "stale", "download", "copy", "config-qr", "leave", "config-text", "peer-list", "peers-legend", "end-room",
-   "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list", "extend-form",
-   "overlay", "overlay-close", "overlay-qr", "overlay-caption", "tab-terminal-help", "key-field", "admin-bar"]
+  ["expires", "member-count", "copy-link", "link-qr", "room-link", "profile-form", "profile-error", "profile-list",
+   "config", "config-title", "peer-count", "stale", "download", "copy", "config-qr", "config-text", "add-apple",
+   "platform-hint", "peer-list", "peers-legend", "end-room", "requests", "request-list", "extend-form", "admin-bar",
+   "overlay", "overlay-close", "overlay-qr", "overlay-caption"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
+
+  // -- browser state: the profiles of this room --------------------------------------------------
+  function load() {
+    var state = null;
+    try { state = JSON.parse(localStorage.getItem(storageKey) || "null"); } catch (e) { state = null; }
+    if (state && state.memberToken && !state.profiles) {
+      // the earlier one-profile shape
+      state = { profiles: [state], selected: 0 };
+    }
+    if (!state || !Array.isArray(state.profiles)) state = { profiles: [], selected: 0 };
+    return state;
+  }
+  function save() {
+    try {
+      if (memory.profiles.length) localStorage.setItem(storageKey, JSON.stringify(memory));
+      else localStorage.removeItem(storageKey);
+    } catch (e) { /* private mode: the state lives for this page only */ }
+  }
+  var memory = load();
+  function selected() {
+    return memory.profiles[memory.selected] || null;
+  }
+  function ownerToken() {
+    try { return localStorage.getItem(ownerKey); } catch (e) { return null; }
+  }
+  // the admin: the owner token this browser kept, or the server recognising the creating browser's cookie
+  function isAdmin() {
+    return Boolean(ownerToken()) || main.dataset.admin === "1";
+  }
+  function authHeaders(token) {
+    return token ? { Authorization: "Bearer " + token } : {};
+  }
+  function b64(bytes) {
+    var s = "";
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    var b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    var h = Array.prototype.map.call(b, function (x) { return (x + 256).toString(16).slice(1); }).join("");
+    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+  }
+  function link(text, onClick, title) {
+    var a = document.createElement("a");
+    a.href = "#";
+    a.textContent = text;
+    if (title) a.title = title;
+    a.addEventListener("click", function (event) { event.preventDefault(); onClick(); });
+    return a;
+  }
+  function span(text, className) {
+    var s = document.createElement("span");
+    s.textContent = text;
+    if (className) s.className = className;
+    return s;
+  }
+
+  // -- platform: only Apple devices can take a tunnel from the browser (a configuration profile) ---
+  function applePlatform() {
+    var ua = navigator.userAgent || "";
+    var platform = navigator.platform || "";
+    if (/iPhone|iPad|iPod/.test(ua)) return "ios";
+    if (/Mac/.test(platform) && navigator.maxTouchPoints > 1) return "ios"; // iPadOS reports itself as a Mac
+    if (/Mac/.test(platform)) return "macos";
+    return null;
+  }
+  var apple = applePlatform();
+  var HINTS = {
+    ios: "iPhone or iPad: [add to WireGuard] saves a profile; open it, then Settings → Profile Downloaded → Install. " +
+      "Or [download] and open the file in WireGuard.",
+    macos: "Mac: [add to WireGuard] saves a profile; open it, then System Settings → Privacy & Security → Profiles → Install. " +
+      "WireGuard from the App Store must be installed and opened once.",
+    other: "WireGuard for Windows and Android cannot be opened from a browser: on Windows import the downloaded " +
+      "file in the app, on Android scan [QR] with the app.",
+  };
 
   // -- the QR overlay ----------------------------------------------------------------------------
   function showQr(text, caption) {
@@ -37,156 +118,106 @@
   el.overlay.addEventListener("click", function (event) { if (event.target === el.overlay) hideQr(); });
   document.addEventListener("keydown", function (event) { if (event.key === "Escape") hideQr(); });
 
-  // -- the two ways to bring a key: made here, or made in a terminal and pasted ----------------------
-  var tab = "browser";
-  function setTab(name) {
-    tab = name;
-    document.querySelectorAll(".tabs a").forEach(function (a) { a.classList.toggle("active", a.dataset.tab === name); });
-    el["tab-terminal-help"].hidden = name !== "terminal";
-    el["key-field"].hidden = name !== "terminal";
-    el["join-form"].public_key.required = name === "terminal";
-  }
-  document.querySelectorAll(".tabs a").forEach(function (a) {
-    a.addEventListener("click", function (event) { event.preventDefault(); setTab(a.dataset.tab); });
-  });
-
-  function authHeaders(token) {
-    return token ? { Authorization: "Bearer " + token } : {};
+  function roomLink() {
+    return el["room-link"].textContent.trim() || (location.origin + location.pathname);
   }
 
-  function link(text, onClick) {
-    var a = document.createElement("a");
-    a.href = "#";
-    a.textContent = text;
-    a.addEventListener("click", function (event) { event.preventDefault(); onClick(); });
-    return a;
-  }
+  // -- what the server says about each profile (by member token), refreshed by the poll ------------
+  var views = {};  // token -> /me response
+  var lastSignature = null;
 
-  // -- platform: only Apple devices can take a tunnel from the browser (a configuration profile) ---
-  function applePlatform() {
-    var ua = navigator.userAgent || "";
-    var platform = navigator.platform || "";
-    if (/iPhone|iPad|iPod/.test(ua)) return "ios";
-    if (/Mac/.test(platform) && navigator.maxTouchPoints > 1) return "ios"; // iPadOS reports itself as a Mac
-    if (/Mac/.test(platform)) return "macos";
-    return null;
-  }
-  var apple = applePlatform();
-  var HINTS = {
-    ios: "iPhone or iPad: [add to WireGuard] saves a profile; open it, then Settings → Profile Downloaded → Install. " +
-      "Or [download] and open the file in WireGuard.",
-    macos: "Mac: [add to WireGuard] saves a profile; open it, then System Settings → Privacy & Security → Profiles → Install. " +
-      "WireGuard from the App Store must be installed and opened once.",
-    other: "WireGuard for Windows and Android cannot be opened from a browser: on Windows import the downloaded " +
-      "file in the app, on Android scan the code below with the app.",
-  };
-
-  function uuid() {
-    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-    var b = new Uint8Array(16);
-    crypto.getRandomValues(b);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    var h = Array.prototype.map.call(b, function (x) { return (x + 256).toString(16).slice(1); }).join("");
-    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
-  }
-
-  // -- browser state -------------------------------------------------------------------------
-  function load() {
-    try { return JSON.parse(localStorage.getItem(storageKey) || "null"); } catch (e) { return null; }
-  }
-  function save(state) {
-    try {
-      if (state) localStorage.setItem(storageKey, JSON.stringify(state));
-      else localStorage.removeItem(storageKey);
-    } catch (e) { /* private mode: the state lives for this page only */ }
-    memory = state;
-  }
-  var memory = load();
-  function ownerToken() {
-    try { return localStorage.getItem(ownerKey); } catch (e) { return null; }
-  }
-
-  function b64(bytes) {
-    var s = "";
-    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-    return btoa(s);
+  function configTextOf(profile) {
+    var view = views[profile.memberToken];
+    if (!view || !view.approved) return "";
+    return profile.privateKey ? view.config_template.split(PLACEHOLDER).join(profile.privateKey) : view.config_template;
   }
 
   // -- rendering -------------------------------------------------------------------------------
-  var configText = "";
-  var currentHash = null;
+  function renderProfiles() {
+    el["profile-list"].innerHTML = "";
+    if (!memory.profiles.length) {
+      var none = document.createElement("div");
+      none.className = "branch dim";
+      none.textContent = "└── no profiles yet";
+      el["profile-list"].appendChild(none);
+      return;
+    }
+    memory.profiles.forEach(function (p, i) {
+      var view = views[p.memberToken];
+      var row = document.createElement("div");
+      row.className = "branch" + (i === memory.selected ? " selected" : "");
+      row.appendChild(span(i === memory.profiles.length - 1 ? "└── " : "├── ", "dim connector"));
+      row.appendChild(link(p.name, function () { memory.selected = i; save(); render(); }, "show this profile's config"));
+      var status = !view ? "…" : view.approved ? p.address + (p.privateKey ? "" : " · key kept elsewhere") : "waiting for the admin";
+      row.appendChild(span("· " + status, "dim"));
+      if (view && view.approved) {
+        row.appendChild(link("[QR]", function () { memory.selected = i; save(); render(); showProfileQr(p); }));
+      }
+      row.appendChild(link("[remove]", function () { removeProfile(i); }, "leave the room with this profile"));
+      el["profile-list"].appendChild(row);
+    });
+  }
 
-  function renderConfig(me) {
-    // a member who joined with their own public key keeps the placeholder and fills it in themselves
-    configText = memory.privateKey ? me.config_template.split(PLACEHOLDER).join(memory.privateKey) : me.config_template;
-    currentHash = me.peers_hash;
-    el["config-text"].textContent = configText;
-    el["peer-count"].textContent = "(covers " + me.peers.length + " peer" + (me.peers.length === 1 ? "" : "s") + ")" +
-      (memory.privateKey ? "" : " · replace " + PLACEHOLDER + " with your private key");
-    el.stale.hidden = !(memory.downloadedHash && memory.downloadedHash !== me.peers_hash);
+  function renderSelected() {
+    var p = selected();
+    var view = p && views[p.memberToken];
+    if (!p || !view || !view.approved) {
+      el.config.hidden = true;
+      return;
+    }
+    var text = configTextOf(p);
+    el["config-title"].textContent = p.name;
+    el["config-text"].textContent = text;
+    el["peer-count"].textContent = "(covers " + view.peers.length + " peer" + (view.peers.length === 1 ? "" : "s") + ")" +
+      (p.privateKey ? "" : " · replace " + PLACEHOLDER + " with the private key");
+    el.stale.hidden = !(p.downloadedHash && p.downloadedHash !== view.peers_hash);
+    el["add-apple"].hidden = !apple || !p.privateKey;
+    el["platform-hint"].textContent = HINTS[apple || "other"];
+    el.config.hidden = false;
+  }
+
+  function renderMembers(state) {
+    var p = selected();
+    var view = p && views[p.memberToken];
+    var accepted = state.members.filter(function (m) { return m.approved; });
+    el["member-count"].textContent = accepted.length;
     el["peer-list"].innerHTML = "";
-    me.peers.forEach(function (p) {
+    var marks = {};
+    if (view && view.approved) view.peers.forEach(function (peer) { marks[peer.public_key] = peer.slots_active; });
+    state.members.forEach(function (m) {
       var li = document.createElement("li");
-      li.dataset.key = p.public_key;
+      li.dataset.key = m.public_key;
       var mark = document.createElement("span");
-      mark.textContent = p.slots_active >= 2 ? "●" : p.slots_active === 1 ? "◐" : "○";
-      mark.title = ["relay sees neither side", "relay sees one side", "relay sees both sides"][p.slots_active] || "";
-      var text = document.createElement("span");
-      text.textContent = p.name + " ";
-      var addr = document.createElement("span");
-      addr.className = "addr";
-      addr.textContent = p.address;
-      text.appendChild(addr);
+      var active = marks[m.public_key];
+      mark.textContent = !m.approved ? "?" : active === undefined ? "·" : active >= 2 ? "●" : active === 1 ? "◐" : "○";
+      if (active !== undefined) mark.title = ["relay sees neither side", "relay sees one side", "relay sees both sides"][active] || "";
+      var text = span(m.name + " ");
+      text.appendChild(span(m.approved ? m.address : "(waiting for the admin)", "addr"));
       li.appendChild(mark);
       li.appendChild(text);
       el["peer-list"].appendChild(li);
     });
-    el["peers-legend"].hidden = me.peers.length === 0;
-    el.join.hidden = true;
-    el.pending.hidden = true;
-    el.config.hidden = false;
-    el["add-apple"].hidden = !apple;
-    el["platform-hint"].textContent = HINTS[apple || "other"];
+    el["peers-legend"].hidden = !(view && view.approved && view.peers.length);
   }
 
-  function renderPending() {
-    el.join.hidden = true;
-    el.config.hidden = true;
-    el.pending.hidden = false;
-  }
-
-  // -- the admin's view: who is asking, from where; accept, reject, remove --------------------------
-  async function adminAction(method, path) {
-    var res = await fetch(api + path, { method: method, headers: authHeaders(ownerToken()) });
-    if (res.status === 404 && path === "") return showGone();
-    lastSignature = null;
-    await refresh();
-  }
-
-  function renderAdmin(view) {
-    var pending = view.members.filter(function (m) { return !m.approved; });
+  function renderAdmin(admin) {
+    var pending = admin.members.filter(function (m) { return !m.approved; });
     el.requests.hidden = pending.length === 0;
     el["request-list"].innerHTML = "";
     pending.forEach(function (m) {
       var li = document.createElement("li");
-      var who = document.createElement("span");
-      who.textContent = m.name + " ";
-      var from = document.createElement("span");
-      from.className = "addr";
-      from.textContent = "from " + (m.joined_ip || "?") + (m.location ? " (" + m.location + ")" : "") + " ";
-      who.appendChild(from);
+      var who = span(m.name + " ");
+      who.appendChild(span("from " + (m.joined_ip || "?") + (m.location ? " (" + m.location + ")" : "") + " ", "addr"));
       who.appendChild(link("[accept]", function () { adminAction("POST", "/members/" + m.id + "/approve"); }));
       who.appendChild(document.createTextNode(" "));
       who.appendChild(link("[reject]", function () { adminAction("DELETE", "/members/" + m.id); }));
-      li.appendChild(document.createElement("span"));
-      li.firstChild.textContent = "?";
+      li.appendChild(span("?"));
       li.appendChild(who);
       el["request-list"].appendChild(li);
     });
-    // a [remove] beside every accepted member in whichever list is showing
+    // a [remove] beside every accepted member in the members list
     var accepted = {};
-    view.members.forEach(function (m) { if (m.approved) accepted[m.public_key] = m; });
+    admin.members.forEach(function (m) { if (m.approved) accepted[m.public_key] = m; });
     Array.prototype.forEach.call(el["peer-list"].querySelectorAll("li[data-key]"), function (li) {
       var m = accepted[li.dataset.key];
       if (!m || li.querySelector("a")) return;
@@ -195,6 +226,125 @@
     });
   }
 
+  var lastState = null, lastAdmin = null;
+  function render() {
+    renderProfiles();
+    renderSelected();
+    if (lastState) renderMembers(lastState);
+    if (lastAdmin) renderAdmin(lastAdmin);
+  }
+
+  function showGone() {
+    main.innerHTML = "<h1>this room ended or never existed</h1><p>Rooms end when their time is up or when their admin ends them.</p>";
+    clearInterval(pollTimer);
+    clearInterval(clockTimer);
+    memory.profiles = [];
+    save();
+  }
+
+  function showProfileError(message) {
+    el["profile-error"].textContent = message;
+    el["profile-error"].hidden = false;
+  }
+
+  // -- server calls ----------------------------------------------------------------------------
+  async function refresh() {
+    var res = await fetch(api + "/state", { cache: "no-store" });
+    if (res.status === 404) return showGone();
+    var state = res.ok ? await res.json() : null;
+    var dropped = [];
+    for (var i = 0; i < memory.profiles.length; i++) {
+      var p = memory.profiles[i];
+      var me = await fetch(api + "/me", { headers: authHeaders(p.memberToken), cache: "no-store" });
+      if (me.status === 404) return showGone();
+      if (me.status === 401) { dropped.push(i); continue; }  // rejected or removed by the admin, or left elsewhere
+      if (me.ok) views[p.memberToken] = await me.json();
+    }
+    if (dropped.length) {
+      var names = dropped.map(function (i) { return memory.profiles[i].name; });
+      memory.profiles = memory.profiles.filter(function (_, i) { return dropped.indexOf(i) < 0; });
+      memory.selected = Math.min(memory.selected, Math.max(0, memory.profiles.length - 1));
+      save();
+      showProfileError("no longer in the room: " + names.join(", ") + " (not accepted, removed, or left).");
+    }
+    var admin = null;
+    if (isAdmin()) {
+      var res2 = await fetch(api + "/admin", { headers: authHeaders(ownerToken()), cache: "no-store" });
+      if (res2.ok) admin = await res2.json();
+    }
+    // rebuild the page only when something changed, so links stay where the reader's cursor is
+    var signature = JSON.stringify([state, memory.profiles.map(function (p) { return views[p.memberToken]; }), admin, memory.selected]);
+    if (signature === lastSignature) return;
+    lastSignature = signature;
+    lastState = state;
+    lastAdmin = admin;
+    render();
+  }
+
+  async function createProfile(name, ownPublicKey) {
+    var p = { name: name, privateKey: null, publicKey: ownPublicKey, downloadedHash: null };
+    if (!ownPublicKey) {
+      var pair = nacl.box.keyPair();
+      p.privateKey = b64(pair.secretKey);
+      p.publicKey = b64(pair.publicKey);
+    }
+    // the admin's own browser sends the owner token and is accepted at once (the cookie does the same)
+    var headers = Object.assign({ "content-type": "application/json" }, authHeaders(ownerToken()));
+    var res = await fetch(api + "/members", {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({ name: name, public_key: p.publicKey }),
+    });
+    var json = await res.json().catch(function () { return {}; });
+    if (res.status === 404) return showGone();
+    if (!res.ok) return showProfileError(json.detail || ("error " + res.status));
+    p.memberToken = json.member_token;
+    p.address = json.address;
+    memory.profiles.push(p);
+    memory.selected = memory.profiles.length - 1;
+    save();
+    el["profile-error"].hidden = true;
+    el["profile-form"].reset();
+    lastSignature = null;
+    await refresh();
+  }
+
+  async function removeProfile(i) {
+    var p = memory.profiles[i];
+    if (!p) return;
+    await fetch(api + "/me", { method: "DELETE", headers: authHeaders(p.memberToken) });
+    delete views[p.memberToken];
+    memory.profiles.splice(i, 1);
+    memory.selected = Math.min(memory.selected, Math.max(0, memory.profiles.length - 1));
+    save();
+    lastSignature = null;
+    await refresh();
+  }
+
+  async function adminAction(method, path) {
+    var res = await fetch(api + path, { method: method, headers: authHeaders(ownerToken()) });
+    if (res.status === 404 && path === "") return showGone();
+    lastSignature = null;
+    await refresh();
+  }
+
+  async function endRoom() {
+    if (!isAdmin()) return;
+    var res = await fetch(api, { method: "DELETE", headers: authHeaders(ownerToken()) });
+    if (res.ok || res.status === 404) {
+      try { localStorage.removeItem(ownerKey); } catch (e) { /* ignore */ }
+      memory.profiles = [];
+      save();
+      location.href = root + "/";
+    }
+  }
+
+  // -- actions on the selected profile ---------------------------------------------------------
+  function markDownloaded(p) {
+    var view = views[p.memberToken];
+    if (view) { p.downloadedHash = view.peers_hash; save(); }
+    el.stale.hidden = true;
+  }
   function saveBlob(text, filename, type) {
     var blob = new Blob([text], { type: type });
     var a = document.createElement("a");
@@ -204,183 +354,63 @@
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
-
-  function addToWireGuard() {
-    if (!apple || !configText) return;
-    if (!memory.privateKey) {
-      el["platform-hint"].textContent = "you joined with your own public key: fill the private key into the downloaded config instead.";
-      return;
-    }
-    // stable identifiers per room and member: re-adding after members change replaces the profile
-    if (!memory.profileUUID) { memory.profileUUID = uuid(); memory.tunnelUUID = uuid(); save(memory); }
-    var title = document.querySelector("#room-header h1").textContent.trim();
+  function fileTag(p) {
+    return "mv" + shortId + "-" + p.name.replace(/[^A-Za-z0-9_=+.-]/g, "-").slice(0, 12);
+  }
+  function showProfileQr(p) {
+    var text = configTextOf(p);
+    if (!text) return;
+    showQr(text, "Scan with the WireGuard app: " + p.name);
+    markDownloaded(p);
+  }
+  function addToWireGuard(p) {
+    var text = configTextOf(p);
+    if (!apple || !text || !p.privateKey) return;
+    // stable identifiers per profile: re-adding after members change replaces the installed profile
+    if (!p.profileUUID) { p.profileUUID = uuid(); p.tunnelUUID = uuid(); save(); }
+    var title = document.querySelector("#room-header .title").textContent.trim();
     var profile = window.microvpnMobileconfig.build({
       platform: apple,
-      name: "microvpn " + title,
-      config: configText,
-      remoteAddress: (configText.match(/Endpoint = ([^:\n]+)/) || [null, location.hostname])[1],
-      identifier: "com.raubcamaioni.microvpn." + roomId,
-      profileUUID: memory.profileUUID,
-      tunnelUUID: memory.tunnelUUID,
+      name: "microvpn " + title + " " + p.name,
+      config: text,
+      remoteAddress: (text.match(/Endpoint = ([^:\n]+)/) || [null, location.hostname])[1],
+      identifier: "com.raubcamaioni.microvpn." + roomId + "." + p.memberToken.slice(0, 8),
+      profileUUID: p.profileUUID,
+      tunnelUUID: p.tunnelUUID,
     });
-    saveBlob(profile, "mv" + shortId + ".mobileconfig", "application/x-apple-aspen-config");
-    markDownloaded();
+    saveBlob(profile, fileTag(p) + ".mobileconfig", "application/x-apple-aspen-config");
+    markDownloaded(p);
   }
 
-  function roomLink() {
-    return el["room-link"].textContent.trim() || (location.origin + location.pathname);
-  }
-
-  var joinedView = false;
-
-  function renderMembers(state) {
-    var accepted = state.members.filter(function (m) { return m.approved; });
-    el["member-count"].textContent = accepted.length;
-    if (joinedView) return; // the joined view lists peers with relay markers instead
-    el["peer-list"].innerHTML = "";
-    state.members.forEach(function (m) {
-      var li = document.createElement("li");
-      li.dataset.key = m.public_key;
-      li.innerHTML = "<span></span><span></span>";
-      li.firstChild.textContent = m.approved ? "·" : "?";
-      li.lastChild.textContent = m.name + " " + (m.approved ? m.address : "(waiting for the admin)");
-      el["peer-list"].appendChild(li);
-    });
-    el["peers-legend"].hidden = true;
-  }
-
-  function showGone() {
-    main.innerHTML = "<h1>this room ended or never existed</h1><p>Rooms end when their time is up or when their creator ends them.</p>";
-    clearInterval(pollTimer);
-    clearInterval(clockTimer);
-    save(null);
-  }
-
-  function showJoinError(message) {
-    el["join-error"].textContent = message;
-    el["join-error"].hidden = false;
-  }
-
-  // -- server calls ----------------------------------------------------------------------------
-  // the admin: the owner token this browser kept, or the server recognising the creating browser's cookie
-  function isAdmin() {
-    return Boolean(ownerToken()) || main.dataset.admin === "1";
-  }
-
-  var lastSignature = null;
-
-  async function refresh() {
-    var res = await fetch(api + "/state", { cache: "no-store" });
-    if (res.status === 404) return showGone();
-    var state = res.ok ? await res.json() : null;
-    var view = null;
-    if (memory && memory.memberToken) {
-      var me = await fetch(api + "/me", { headers: authHeaders(memory.memberToken), cache: "no-store" });
-      if (me.status === 404) return showGone();
-      if (me.status === 401) {
-        // our membership is gone: rejected or removed by the admin, left from another tab, or the key was lost
-        save(null);
-        joinedView = false;
-        lastSignature = null;
-        el.config.hidden = true;
-        el.pending.hidden = true;
-        el.join.hidden = false;
-        showJoinError("this device is no longer in the room (not accepted, removed, or left). Join again if you need to.");
-      } else if (me.ok) {
-        view = await me.json();
-      }
-    }
-    var admin = null;
-    if (isAdmin()) {
-      var res2 = await fetch(api + "/admin", { headers: authHeaders(ownerToken()), cache: "no-store" });
-      if (res2.ok) admin = await res2.json();
-    }
-    // rebuild the page only when something changed, so links stay where the reader's cursor is
-    var signature = JSON.stringify([state, view, admin]);
-    if (signature === lastSignature) return;
-    lastSignature = signature;
-    if (view) {
-      if (view.approved) {
-        joinedView = true;
-        renderConfig(view);
-      } else {
-        joinedView = false;
-        renderPending();
-      }
-    }
-    if (state) renderMembers(state);
-    if (admin) renderAdmin(admin);
-  }
-
-  async function join(name, ownPublicKey) {
-    var state;
-    if (ownPublicKey) {
-      state = { privateKey: null, publicKey: ownPublicKey, name: name, downloadedHash: null };
-    } else {
-      var pair = nacl.box.keyPair();
-      state = { privateKey: b64(pair.secretKey), publicKey: b64(pair.publicKey), name: name, downloadedHash: null };
-    }
-    // the admin's own browser sends the owner token and is accepted at once
-    var headers = { "content-type": "application/json" };
-    if (ownerToken()) headers.Authorization = "Bearer " + ownerToken();
-    var res = await fetch(api + "/members", {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify({ name: name, public_key: state.publicKey }),
-    });
-    var json = await res.json().catch(function () { return {}; });
-    if (res.status === 404) return showGone();
-    if (!res.ok) return showJoinError(json.detail || ("error " + res.status));
-    state.memberToken = json.member_token;
-    state.address = json.address;
-    save(state);
-    el["join-error"].hidden = true;
-    await refresh();
-  }
-
-  async function leave() {
-    if (memory && memory.memberToken) {
-      await fetch(api + "/me", { method: "DELETE", headers: authHeaders(memory.memberToken) });
-    }
-    save(null);
-    joinedView = false;
-    el.config.hidden = true;
-    el.pending.hidden = true;
-    el.join.hidden = false;
-    await refresh();
-  }
-
-  async function endRoom() {
-    if (!isAdmin()) return;
-    var res = await fetch(api, { method: "DELETE", headers: authHeaders(ownerToken()) });
-    if (res.ok || res.status === 404) {
-      try { localStorage.removeItem(ownerKey); } catch (e) { /* ignore */ }
-      save(null);
-      location.href = root + "/";
-    }
-  }
-
-  // -- actions ---------------------------------------------------------------------------------
-  function markDownloaded() {
-    memory.downloadedHash = currentHash;
-    save(memory);
-    el.stale.hidden = true;
-  }
-
-  el["join-form"].addEventListener("submit", function (event) {
+  el["profile-form"].addEventListener("submit", function (event) {
     event.preventDefault();
-    var form = new FormData(el["join-form"]);
-    join(String(form.get("name") || "").trim(), tab === "terminal" ? String(form.get("public_key") || "").trim() : "");
+    var form = new FormData(el["profile-form"]);
+    createProfile(String(form.get("name") || "").trim(), String(form.get("public_key") || "").trim());
   });
   el.download.addEventListener("click", function (event) {
     event.preventDefault();
-    saveBlob(configText, "mv" + shortId + ".conf", "application/octet-stream");
-    markDownloaded();
+    var p = selected();
+    var text = p && configTextOf(p);
+    if (!text) return;
+    saveBlob(text, fileTag(p) + ".conf", "application/octet-stream");
+    markDownloaded(p);
   });
-  el["add-apple"].addEventListener("click", function (event) { event.preventDefault(); addToWireGuard(); });
   el.copy.addEventListener("click", function (event) {
     event.preventDefault();
-    navigator.clipboard.writeText(configText).then(markDownloaded, function () {});
+    var p = selected();
+    var text = p && configTextOf(p);
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(function () { markDownloaded(p); }, function () {});
+  });
+  el["config-qr"].addEventListener("click", function (event) {
+    event.preventDefault();
+    var p = selected();
+    if (p) showProfileQr(p);
+  });
+  el["add-apple"].addEventListener("click", function (event) {
+    event.preventDefault();
+    var p = selected();
+    if (p) addToWireGuard(p);
   });
   el["copy-link"].addEventListener("click", function (event) {
     event.preventDefault();
@@ -393,14 +423,6 @@
     event.preventDefault();
     showQr(roomLink(), "Scan to Join");
   });
-  el["config-qr"].addEventListener("click", function (event) {
-    event.preventDefault();
-    if (!configText) return;
-    showQr(configText, "Scan with the WireGuard app");
-    markDownloaded();
-  });
-  el.leave.addEventListener("click", function (event) { event.preventDefault(); leave(); });
-  el["cancel-join"].addEventListener("click", function (event) { event.preventDefault(); leave(); });
   el["end-room"].addEventListener("click", function (event) { event.preventDefault(); endRoom(); });
 
   // -- countdown and extending -----------------------------------------------------------------
@@ -411,7 +433,6 @@
     var h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
     el.expires.textContent = "expires in " + (h ? h + "h " : "") + m + "m " + s + "s";
   }
-
   async function extend(hours) {
     var res = await fetch(api + "/extend", {
       method: "POST",
@@ -431,8 +452,7 @@
 
   // -- start -----------------------------------------------------------------------------------
   if (isAdmin()) el["admin-bar"].hidden = false;
-  if (memory && memory.memberToken) { el.join.hidden = true; }
-  setTab("browser");
+  renderProfiles();
   tick();
   var clockTimer = setInterval(tick, 1000);
   refresh();

@@ -41,11 +41,12 @@ def test_room_page_and_gone_page(client):
     # the link at the top with copy and a QR button that opens the overlay
     assert f'id="room-link"' in page and f"/r/{room['id']}" in page
     assert 'id="copy-link"' in page and 'id="link-qr"' in page and 'id="overlay"' in page and 'id="overlay-close"' in page
-    # two ways to bring a key, as tabs; the terminal one carries the genkey command
-    assert 'data-tab="browser"' in page and 'data-tab="terminal"' in page
-    assert 'name="public_key"' in page and "wg genkey | tee private.key | wg pubkey" in page
-    # the install steps are there but folded away
-    assert "<details" in page and "install WireGuard" in page and "Import tunnel(s) from file" in page
+    # top: install steps and own-key steps, both folded away, then the new-profile form, then the profiles tree
+    assert "install WireGuard" in page and "Import tunnel(s) from file" in page
+    assert "wg genkey | tee private.key | wg pubkey" in page and 'name="public_key"' in page
+    assert 'id="new-profile"' in page and 'id="profiles"' in page and "your profiles/" in page
+    assert page.index('id="room-link"') < page.index('id="install"') < page.index('id="own-key"') < page.index('id="new-profile"') < page.index('id="profiles"')
+    assert 'data-tab=' not in page
     assert "join.sh" not in page and "| sh" not in page
     assert 'id="requests"' in page and "accept" in page.lower()
     assert "approximate location" in page and "db-ip.com" in page

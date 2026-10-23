@@ -87,3 +87,7 @@ details[open] summary { margin-bottom: 0.5rem; }
 #admin-bar[hidden] { display: none; }
 #admin-bar form { margin: 0; display: inline-flex; gap: 0.25rem 1ch; }
 .badge { font-weight: bold; }
+#new-profile { margin: 1rem 0; }
+#new-profile form { margin: 0; }
+.tree .branch.selected > a:first-of-type { background: var(--paper); color: var(--ink); }
+.tree .branch .connector { white-space: pre; }
