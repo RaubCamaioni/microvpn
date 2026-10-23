@@ -98,7 +98,7 @@ user, installs the units and firewall rules, clones this repository and builds t
 server; `deploy/build-on-server.sh` rebuilds and restarts from any ref:
 
 ```bash
-ssh root@<host> 'sudo -iu microvpn ~/microvpn/build-on-server.sh main'
+ssh root@<host> 'sudo -iu microvpn /home/microvpn/microvpn/build-on-server.sh main'
 ```
 
 Once the `DOCKER_USERNAME` and `DOCKER_TOKEN` secrets exist on the repository, a release deploys

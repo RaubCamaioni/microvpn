@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
 
@@ -165,6 +166,54 @@ async def test_restore_reopens_ports_and_skips_failures(tmp_path, clock):
     relay2.fail_ports = {min(ports)}
     s2 = RoomService(engine, make_settings(RELAY_PORT_RANGE="30000-30009"), relay2, now=lambda: clock.t)
     assert await s2.restore() == 2 and set(relay2.opened) == ports - {min(ports)}
+
+
+async def test_concurrent_joins_get_distinct_addresses_and_pairs(tmp_path, clock):
+    s = service(tmp_path, clock, "c.db")
+    plain_open = s.relay.open
+
+    async def slow_open(port, room_id, keys=None):
+        await asyncio.sleep(0.01)  # yield to the other joins, as a real bind and the loop would
+        return await plain_open(port, room_id, keys)
+
+    s.relay.open = slow_open
+    r = s.create_room("", 1, "ip")
+    members = await asyncio.gather(*(s.join(r.id, f"m{i}", KEY(i)) for i in range(1, 5)))
+    assert len({m.address for m in members}) == 4
+    assert len(s.relay.opened) == 6 and len({m.token for m in members}) == 4
+    assert s.member_view(r.id, members[0].token).config_template.count("[Peer]") == 3
+
+
+async def test_join_closes_its_ports_on_any_failure(tmp_path, clock):
+    s = service(tmp_path, clock, "x.db")
+    r = s.create_room("", 1, "ip")
+    await s.join(r.id, "a", KEY(1))
+    await s.join(r.id, "b", KEY(2))
+    plain_open = s.relay.open
+    calls = []
+
+    async def flaky_open(port, room_id, keys=None):
+        calls.append(port)
+        if len(calls) == 2:
+            raise RuntimeError("bind exploded")
+        return await plain_open(port, room_id, keys)
+
+    s.relay.open = flaky_open
+    with pytest.raises(RuntimeError):
+        await s.join(r.id, "c", KEY(3))
+    assert [m.name for m in s.room_view(r.id).members] == ["a", "b"]
+    assert len(s.relay.opened) == 1 and s.relay.closed == [calls[0]]
+
+
+async def test_relay_gets_the_pair_public_keys_on_join_and_restore(svc):
+    r = svc.create_room("", 1, "ip")
+    await svc.join(r.id, "a", KEY(1))
+    await svc.join(r.id, "b", KEY(2))
+    assert len(svc.relay.keys) == 1 and set(next(iter(svc.relay.keys.values()))) == {KEY(1), KEY(2)}
+    relay2 = FakeRelay()
+    s2 = RoomService(svc.engine, svc.settings, relay2, now=svc.now)
+    assert await s2.restore() == 1
+    assert len(relay2.keys) == 1 and set(next(iter(relay2.keys.values()))) == {KEY(1), KEY(2)}
 
 
 async def test_member_view_reports_relay_activity_and_bad_tokens(svc):

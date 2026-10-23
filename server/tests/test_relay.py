@@ -47,12 +47,36 @@ def test_token_bucket_refills_over_time():
 
 
 # --- forwarding, with real UDP sockets on localhost ---------------------------------------------
+# A slot is claimed only by a handshake whose mac1 was computed with one of the pair's public keys,
+# exactly as a real WireGuard client computes it; junk and spoofed packets never claim a slot.
 
 import asyncio  # noqa: E402
+import base64  # noqa: E402
+import hashlib  # noqa: E402
 import socket  # noqa: E402
 
-from app.relay import Relay  # noqa: E402
+from app.relay import Relay, mac1_valid  # noqa: E402
 from app.settings import Settings  # noqa: E402
+
+KA = base64.b64encode(bytes([1] * 32)).decode()
+KB = base64.b64encode(bytes([2] * 32)).decode()
+KX = base64.b64encode(bytes([9] * 32)).decode()  # not in the pair
+
+
+def handshake(kind, pubkey_b64, filler=0x01):
+    """A handshake message (type 1 or 2) whose mac1 is valid for the receiver whose public key is
+    `pubkey_b64`: mac1 = keyed_blake2s(key=blake2s("mac1----" || pubkey), message[:-32])[:16],
+    followed by an all-zero mac2 (no cookie)."""
+    body = bytes([kind, 0, 0, 0]) + bytes([filler]) * (LENGTHS[kind] - 4 - 32)
+    key = hashlib.blake2s(b"mac1----" + base64.b64decode(pubkey_b64), digest_size=32).digest()
+    mac1 = hashlib.blake2s(body, digest_size=16, key=key).digest()
+    return body + mac1 + bytes(16)
+
+
+def test_mac1_valid_accepts_either_key_of_the_pair_and_rejects_others():
+    assert mac1_valid(handshake(1, KA), (KA, KB)) and mac1_valid(handshake(2, KB), (KA, KB))
+    assert not mac1_valid(handshake(1, KX), (KA, KB))
+    assert not mac1_valid(make_packet(1), (KA, KB))  # no mac1 at all
 
 
 def udp_client():
@@ -73,26 +97,38 @@ def relay_settings(**over):
 
 async def test_forwards_between_the_two_learned_addresses():
     relay = Relay(relay_settings())
-    assert await relay.open(30001, "room") and relay.is_open(30001) and relay.ports_in_use() == 1
+    assert await relay.open(30001, "room", (KA, KB)) and relay.is_open(30001) and relay.ports_in_use() == 1
     a, b = udp_client(), udp_client()
-    a.sendto(make_packet(1), ("127.0.0.1", 30001))  # first address: claims slot 1, nobody to forward to
-    b.sendto(make_packet(2), ("127.0.0.1", 30001))  # second: claims slot 2, forwarded to a
-    assert await recv(a) == make_packet(2)
+    a.sendto(handshake(1, KB), ("127.0.0.1", 30001))  # a, for b's key: claims slot 1, nobody to forward to
+    b.sendto(handshake(2, KA), ("127.0.0.1", 30001))  # b, for a's key: claims slot 2, forwarded to a
+    assert await recv(a) == handshake(2, KA)
     a.sendto(make_packet(4, 100), ("127.0.0.1", 30001))
     assert await recv(b) == make_packet(4, 100)
     assert relay.slots_active(30001) == 2 and relay.slots_active(30002) == 0
     relay.close(30001)
+    await asyncio.sleep(0)  # the close runs on the loop
     assert not relay.is_open(30001) and relay.ports_in_use() == 0
 
 
-async def test_malformed_and_third_party_data_are_dropped():
+async def test_open_returns_false_for_an_already_open_port():
     relay = Relay(relay_settings())
-    await relay.open(30002, "room")
+    assert await relay.open(30009, "room", (KA, KB))
+    assert await relay.open(30009, "other-room", (KA, KX)) is False  # never hand one port to two pairs
+    relay.close(30009)
+
+
+async def test_unknown_addresses_cannot_claim_a_slot_without_a_valid_mac1():
+    relay = Relay(relay_settings())
+    await relay.open(30002, "room", (KA, KB))
     a, b, c = udp_client(), udp_client(), udp_client()
-    a.sendto(make_packet(1), ("127.0.0.1", 30002))
-    b.sendto(make_packet(2), ("127.0.0.1", 30002))
+    c.sendto(make_packet(4, 64), ("127.0.0.1", 30002))  # data from nobody: no slot
+    c.sendto(make_packet(1), ("127.0.0.1", 30002))  # handshake-shaped junk: no slot
+    c.sendto(handshake(1, KX), ("127.0.0.1", 30002))  # handshake for a key outside the pair: no slot
+    await asyncio.sleep(0.05)
+    assert relay.slots_active(30002) == 0
+    a.sendto(handshake(1, KB), ("127.0.0.1", 30002))
+    b.sendto(handshake(2, KA), ("127.0.0.1", 30002))
     await recv(a)
-    c.sendto(make_packet(4, 64), ("127.0.0.1", 30002))  # unknown address, data packet: dropped, slots unchanged
     b.sendto(b"junk", ("127.0.0.1", 30002))  # malformed: dropped
     a.sendto(make_packet(4), ("127.0.0.1", 30002))
     assert await recv(b) == make_packet(4)
@@ -104,17 +140,21 @@ async def test_malformed_and_third_party_data_are_dropped():
 async def test_handshake_from_a_new_address_replaces_the_stale_slot():
     t = [100.0]
     relay = Relay(relay_settings(), clock=lambda: t[0])
-    await relay.open(30003, "room")
-    a, b, a2 = udp_client(), udp_client(), udp_client()
-    a.sendto(make_packet(1), ("127.0.0.1", 30003))
+    await relay.open(30003, "room", (KA, KB))
+    a, b, a2, x = udp_client(), udp_client(), udp_client(), udp_client()
+    a.sendto(handshake(1, KB), ("127.0.0.1", 30003))
     t[0] = 101.0
-    b.sendto(make_packet(2), ("127.0.0.1", 30003))
+    b.sendto(handshake(2, KA), ("127.0.0.1", 30003))
     await recv(a)
     t[0] = 140.0
-    a2.sendto(make_packet(1), ("127.0.0.1", 30003))  # a roamed: least recently seen slot (a) is replaced
-    assert await recv(b) == make_packet(1)
+    x.sendto(make_packet(1), ("127.0.0.1", 30003))  # handshake-shaped junk: both slots keep their owners
+    await asyncio.sleep(0.05)
+    a2.sendto(handshake(1, KB), ("127.0.0.1", 30003))  # a roamed: the least recently seen slot (a) is replaced
+    assert await recv(b) == handshake(1, KB)
     b.sendto(make_packet(4), ("127.0.0.1", 30003))
     assert await recv(a2) == make_packet(4)
+    with pytest.raises(asyncio.TimeoutError):
+        await recv(x, 0.3)
     assert relay.slots_active(30003, window=30.0) == 2  # both seen within 30 s of t=140
     t[0] = 200.0
     assert relay.slots_active(30003, window=30.0) == 0
@@ -123,12 +163,12 @@ async def test_handshake_from_a_new_address_replaces_the_stale_slot():
 
 async def test_room_bucket_drops_over_budget_and_close_room_frees_ports():
     relay = Relay(relay_settings(ROOM_MBPS="0.008"))  # 1000 bytes per second, 1000-byte burst
-    await relay.open(30004, "r1")
-    await relay.open(30005, "r1")
-    await relay.open(30006, "r2")
+    await relay.open(30004, "r1", (KA, KB))
+    await relay.open(30005, "r1", (KA, KX))
+    await relay.open(30006, "r2", (KB, KX))
     a, b = udp_client(), udp_client()
-    a.sendto(make_packet(1), ("127.0.0.1", 30004))
-    b.sendto(make_packet(2), ("127.0.0.1", 30004))
+    a.sendto(handshake(1, KB), ("127.0.0.1", 30004))
+    b.sendto(handshake(2, KA), ("127.0.0.1", 30004))
     await recv(a)
     a.sendto(make_packet(4, 900), ("127.0.0.1", 30004))
     assert await recv(b) == make_packet(4, 900)
@@ -136,6 +176,7 @@ async def test_room_bucket_drops_over_budget_and_close_room_frees_ports():
     with pytest.raises(asyncio.TimeoutError):
         await recv(b, 0.3)
     relay.close_room("r1")
+    await asyncio.sleep(0)
     assert not relay.is_open(30004) and not relay.is_open(30005) and relay.is_open(30006)
     relay.close_room("r2")
 
@@ -144,5 +185,16 @@ async def test_open_returns_false_when_the_port_is_taken():
     holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     holder.bind(("127.0.0.1", 30007))
     relay = Relay(relay_settings())
-    assert await relay.open(30007, "room") is False and not relay.is_open(30007)
+    assert await relay.open(30007, "room", (KA, KB)) is False and not relay.is_open(30007)
     holder.close()
+
+
+async def test_close_from_another_thread_releases_the_port_on_the_loop():
+    relay = Relay(relay_settings())
+    assert await relay.open(30008, "room", (KA, KB))
+    await asyncio.to_thread(relay.close, 30008)  # sync endpoints and the sweeper run in worker threads
+    await asyncio.sleep(0.05)
+    assert not relay.is_open(30008)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("127.0.0.1", 30008))  # free again
+    s.close()

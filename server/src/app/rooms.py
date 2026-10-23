@@ -4,6 +4,7 @@ The service owns every decision the API and pages only expose: limits, addresses
 expiry. Errors are RoomError subclasses carrying the HTTP status the API answers with.
 """
 
+import asyncio
 import hmac
 import logging
 import random
@@ -68,7 +69,7 @@ class Unauthorized(RoomError):
 class RelayPorts(Protocol):
     """What the service needs from app.relay.Relay (tests substitute a double)."""
 
-    async def open(self, port: int, room_id: str) -> bool: ...
+    async def open(self, port: int, room_id: str, keys: tuple[str, str]) -> bool: ...
 
     def close(self, port: int) -> None: ...
 
@@ -111,6 +112,8 @@ class RoomService:
         self.now = now
         # room creations per client address in the last hour; in memory, reset by a restart
         self._creations: dict[str, deque[datetime]] = {}
+        # joins are serialised: each one reads the room, binds ports, then writes in one transaction
+        self._join_lock = asyncio.Lock()
 
     def _session(self) -> Session:
         return Session(self.engine, expire_on_commit=False)
@@ -191,13 +194,18 @@ class RoomService:
         """At startup: sweep, then re-open the relay port of every surviving pair; returns how many opened."""
         self.sweep()
         with self._session() as s:
-            pairs = s.exec(select(Pair)).all()
+            rows = s.exec(
+                select(Pair.port, Pair.room_id, Member.public_key, Pair.member_b_id)
+                .join(Member, Member.id == Pair.member_a_id)
+                .join(Room, Room.id == Pair.room_id)
+            ).all()
+            keys_b = {m.id: m.public_key for m in s.exec(select(Member)).all()}
         opened = 0
-        for pair in pairs:
-            if await self.relay.open(pair.port, pair.room_id):
+        for port, room_id, key_a, member_b_id in rows:
+            if await self.relay.open(port, room_id, (key_a, keys_b[member_b_id])):
                 opened += 1
             else:
-                logger.warning("restore: pair port %d of room %s could not be re-bound", pair.port, pair.room_id[:8])
+                logger.warning("restore: pair port %d of room %s could not be re-bound", port, room_id[:8])
         return opened
 
     def counts(self) -> dict:
@@ -217,46 +225,52 @@ class RoomService:
             raise Invalid(f"device name: 1 to {keys.DEVICE_NAME_MAX} printable characters")
         if not keys.is_public_key(public_key):
             raise Invalid("public key: 44 base64 characters encoding 32 bytes")
-        opened: list[int] = []
-        with self._session() as s:
-            room = self._live_room(s, room_id)
-            others = self._members(s, room)
-            if len(others) >= self.settings.ROOM_MAX_MEMBERS:
-                raise RoomFull()
-            if any(m.public_key == public_key for m in others):
-                raise DuplicateKey()
-            member = Member(
-                room_id=room.id,
-                name=clean,
-                public_key=public_key,
-                address=self._free_address(room, others),
-                token=keys.new_token(),
-                created_at=self.now(),
-            )
-            s.add(member)
-            s.flush()  # assigns member.id for the pairs
-            used_ports = set(s.exec(select(Pair.port)).all())
+        async with self._join_lock:
+            # 1. read: the room, its members, the ports in use (no write lock held across awaits)
+            with self._session() as s:
+                room = self._live_room(s, room_id)
+                others = self._members(s, room)
+                if len(others) >= self.settings.ROOM_MAX_MEMBERS:
+                    raise RoomFull()
+                if any(m.public_key == public_key for m in others):
+                    raise DuplicateKey()
+                address = self._free_address(room, others)
+                used_ports = set(s.exec(select(Pair.port)).all())
+            # 2. bind one relay port per pair; on any failure give every port back
+            opened: list[tuple[int, int]] = []  # (other member id, port)
             try:
                 for other in others:
-                    port = await self._open_free_port(room.id, used_ports)
-                    opened.append(port)
+                    port = await self._open_free_port(room.id, used_ports, (public_key, other.public_key))
+                    opened.append((other.id, port))
                     used_ports.add(port)
-                    a, b = sorted((member.id, other.id))
-                    s.add(Pair(room_id=room.id, member_a_id=a, member_b_id=b, port=port))
-                s.commit()
-            except ServerFull:
-                s.rollback()
-                for port in opened:
+                # 3. write: the member and its pairs in one short transaction
+                with self._session() as s:
+                    member = Member(
+                        room_id=room.id,
+                        name=clean,
+                        public_key=public_key,
+                        address=address,
+                        token=keys.new_token(),
+                        created_at=self.now(),
+                    )
+                    s.add(member)
+                    s.flush()  # assigns member.id for the pairs
+                    for other_id, port in opened:
+                        a, b = sorted((member.id, other_id))
+                        s.add(Pair(room_id=room.id, member_a_id=a, member_b_id=b, port=port))
+                    s.commit()
+            except BaseException:
+                for _, port in opened:
                     self.relay.close(port)
                 raise
         return member
 
-    async def _open_free_port(self, room_id: str, used: set[int]) -> int:
+    async def _open_free_port(self, room_id: str, used: set[int], pair_keys: tuple[str, str]) -> int:
         lo, hi = self.settings.RELAY_PORT_RANGE
         free = set(range(lo, hi + 1)) - used
         while free:
             port = random.choice(tuple(free))
-            if await self.relay.open(port, room_id):
+            if await self.relay.open(port, room_id, pair_keys):
                 return port
             free.discard(port)
         raise ServerFull()
