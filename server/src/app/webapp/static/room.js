@@ -15,8 +15,20 @@
   var el = {};
   ["expires", "member-count", "copy-link", "join", "join-form", "join-error", "config", "peer-count", "stale",
    "download", "copy", "leave", "config-text", "qr", "room-qr", "peer-list", "peers-legend", "owner", "end-room",
-   "add-apple", "platform-hint"]
+   "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
+
+  function authHeaders(token) {
+    return token ? { Authorization: "Bearer " + token } : {};
+  }
+
+  function link(text, onClick) {
+    var a = document.createElement("a");
+    a.href = "#";
+    a.textContent = text;
+    a.addEventListener("click", function (event) { event.preventDefault(); onClick(); });
+    return a;
+  }
 
   // -- platform: only Apple devices can take a tunnel from the browser (a configuration profile) ---
   function applePlatform() {
@@ -93,6 +105,7 @@
     el["peer-list"].innerHTML = "";
     me.peers.forEach(function (p) {
       var li = document.createElement("li");
+      li.dataset.key = p.public_key;
       var mark = document.createElement("span");
       mark.textContent = p.slots_active >= 2 ? "●" : p.slots_active === 1 ? "◐" : "○";
       mark.title = ["relay sees neither side", "relay sees one side", "relay sees both sides"][p.slots_active] || "";
@@ -108,9 +121,54 @@
     });
     el["peers-legend"].hidden = me.peers.length === 0;
     el.join.hidden = true;
+    el.pending.hidden = true;
     el.config.hidden = false;
     el["add-apple"].hidden = !apple;
     el["platform-hint"].textContent = HINTS[apple || "other"];
+  }
+
+  function renderPending() {
+    el.join.hidden = true;
+    el.config.hidden = true;
+    el.pending.hidden = false;
+  }
+
+  // -- the admin's view: who is asking, from where; accept, reject, remove --------------------------
+  async function adminAction(method, path) {
+    var res = await fetch(api + path, { method: method, headers: authHeaders(ownerToken()) });
+    if (res.status === 404 && path === "") return showGone();
+    await refresh();
+  }
+
+  function renderAdmin(view) {
+    var pending = view.members.filter(function (m) { return !m.approved; });
+    el.requests.hidden = pending.length === 0;
+    el["request-list"].innerHTML = "";
+    pending.forEach(function (m) {
+      var li = document.createElement("li");
+      var who = document.createElement("span");
+      who.textContent = m.name + " ";
+      var from = document.createElement("span");
+      from.className = "addr";
+      from.textContent = "from " + (m.joined_ip || "?") + (m.location ? " (" + m.location + ")" : "") + " ";
+      who.appendChild(from);
+      who.appendChild(link("[accept]", function () { adminAction("POST", "/members/" + m.id + "/approve"); }));
+      who.appendChild(document.createTextNode(" "));
+      who.appendChild(link("[reject]", function () { adminAction("DELETE", "/members/" + m.id); }));
+      li.appendChild(document.createElement("span"));
+      li.firstChild.textContent = "?";
+      li.appendChild(who);
+      el["request-list"].appendChild(li);
+    });
+    // a [remove] beside every accepted member in whichever list is showing
+    var accepted = {};
+    view.members.forEach(function (m) { if (m.approved) accepted[m.public_key] = m; });
+    Array.prototype.forEach.call(el["peer-list"].querySelectorAll("li[data-key]"), function (li) {
+      var m = accepted[li.dataset.key];
+      if (!m || li.querySelector("a")) return;
+      li.lastChild.appendChild(document.createTextNode(" "));
+      li.lastChild.appendChild(link("[remove]", function () { adminAction("DELETE", "/members/" + m.id); }));
+    });
   }
 
   function saveBlob(text, filename, type) {
@@ -157,14 +215,19 @@
     }
   }
 
+  var joinedView = false;
+
   function renderMembers(state) {
-    el["member-count"].textContent = state.members.length;
-    if (memory && memory.memberToken) return; // the joined view lists peers with relay markers instead
+    var accepted = state.members.filter(function (m) { return m.approved; });
+    el["member-count"].textContent = accepted.length;
+    if (joinedView) return; // the joined view lists peers with relay markers instead
     el["peer-list"].innerHTML = "";
     state.members.forEach(function (m) {
       var li = document.createElement("li");
-      li.innerHTML = "<span>·</span><span></span>";
-      li.lastChild.textContent = m.name + " " + m.address;
+      li.dataset.key = m.public_key;
+      li.innerHTML = "<span></span><span></span>";
+      li.firstChild.textContent = m.approved ? "·" : "?";
+      li.lastChild.textContent = m.name + " " + (m.approved ? m.address : "(waiting for the admin)");
       el["peer-list"].appendChild(li);
     });
     el["peers-legend"].hidden = true;
@@ -186,18 +249,34 @@
   async function refresh() {
     var res = await fetch(api + "/state", { cache: "no-store" });
     if (res.status === 404) return showGone();
-    if (res.ok) renderMembers(await res.json());
-    if (!(memory && memory.memberToken)) return;
-    var me = await fetch(api + "/me", { headers: { Authorization: "Bearer " + memory.memberToken }, cache: "no-store" });
-    if (me.status === 404) return showGone();
-    if (me.status === 401) {
-      // our membership is gone (left from another tab, or the key was lost): offer to join again
-      save(null);
-      el.config.hidden = true;
-      el.join.hidden = false;
-      return;
+    var state = res.ok ? await res.json() : null;
+    if (memory && memory.memberToken) {
+      var me = await fetch(api + "/me", { headers: authHeaders(memory.memberToken), cache: "no-store" });
+      if (me.status === 404) return showGone();
+      if (me.status === 401) {
+        // our membership is gone: rejected or removed by the admin, left from another tab, or the key was lost
+        save(null);
+        joinedView = false;
+        el.config.hidden = true;
+        el.pending.hidden = true;
+        el.join.hidden = false;
+        showJoinError("this device is no longer in the room (not accepted, removed, or left). Join again if you need to.");
+      } else if (me.ok) {
+        var view = await me.json();
+        if (view.approved) {
+          joinedView = true;
+          renderConfig(view);
+        } else {
+          joinedView = false;
+          renderPending();
+        }
+      }
     }
-    if (me.ok) renderConfig(await me.json());
+    if (state) renderMembers(state);
+    if (ownerToken()) {
+      var admin = await fetch(api + "/admin", { headers: authHeaders(ownerToken()), cache: "no-store" });
+      if (admin.ok) renderAdmin(await admin.json());
+    }
   }
 
   async function join(name, ownPublicKey) {
@@ -208,9 +287,12 @@
       var pair = nacl.box.keyPair();
       state = { privateKey: b64(pair.secretKey), publicKey: b64(pair.publicKey), name: name, downloadedHash: null };
     }
+    // the admin's own browser sends the owner token and is accepted at once
+    var headers = { "content-type": "application/json" };
+    if (ownerToken()) headers.Authorization = "Bearer " + ownerToken();
     var res = await fetch(api + "/members", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: headers,
       body: JSON.stringify({ name: name, public_key: state.publicKey }),
     });
     var json = await res.json().catch(function () { return {}; });
@@ -225,10 +307,12 @@
 
   async function leave() {
     if (memory && memory.memberToken) {
-      await fetch(api + "/me", { method: "DELETE", headers: { Authorization: "Bearer " + memory.memberToken } });
+      await fetch(api + "/me", { method: "DELETE", headers: authHeaders(memory.memberToken) });
     }
     save(null);
+    joinedView = false;
     el.config.hidden = true;
+    el.pending.hidden = true;
     el.join.hidden = false;
     await refresh();
   }
@@ -236,7 +320,7 @@
   async function endRoom() {
     var token = ownerToken();
     if (!token) return;
-    var res = await fetch(api, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+    var res = await fetch(api, { method: "DELETE", headers: authHeaders(token) });
     if (res.ok || res.status === 404) {
       try { localStorage.removeItem(ownerKey); } catch (e) { /* ignore */ }
       save(null);
@@ -274,6 +358,7 @@
     }, function () {});
   });
   el.leave.addEventListener("click", function (event) { event.preventDefault(); leave(); });
+  el["cancel-join"].addEventListener("click", function (event) { event.preventDefault(); leave(); });
   el["end-room"].addEventListener("click", function (event) { event.preventDefault(); endRoom(); });
 
   // -- countdown -------------------------------------------------------------------------------

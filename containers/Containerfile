@@ -12,6 +12,11 @@ RUN python -m venv /venv && /venv/bin/python -c "\
 import subprocess, sys, tomllib; \
 deps = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['dependencies']; \
 subprocess.check_call([sys.executable, '-m', 'pip', 'install', *deps])"
+# DB-IP "IP to City Lite" (CC BY 4.0, https://db-ip.com): the admin sees an approximate location beside
+# each device asking to join, looked up offline so no member address leaves the server. Published
+# monthly; this month's file, else last month's. The layer is rebuilt when the month changes.
+COPY containers/fetch-dbip.py /tmp/fetch-dbip.py
+RUN mkdir -p /usr/share/dbip && python /tmp/fetch-dbip.py /usr/share/dbip/dbip-city-lite.mmdb && rm /tmp/fetch-dbip.py
 
 
 FROM base AS test

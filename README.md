@@ -1,8 +1,8 @@
 # microvpn
 
 Temporary WireGuard rooms. Create a room, share its link, and everyone who opens it gets a
-WireGuard configuration for their device: a `.conf` download, a QR code for the phone apps, or a
-one-line shell command for a headless machine. Members then reach each other over a private
+WireGuard configuration for their device: a `.conf` download, a QR code for the phone apps, or an
+Apple configuration profile. Members then reach each other over a private
 virtual LAN. Nothing is routed to the internet, nobody opens a port, and the room ends on its own.
 
 The public instance runs at **https://raubcamaioni.com/microvpn/**.
@@ -15,7 +15,11 @@ behind it are in `docs/superpowers/specs/2026-10-22-microvpn-design.md`.
 ## How it works
 
 1. **Create.** The front page makes a room with a random 26-character id and a lifetime of 1, 4,
-   12 or 24 hours. The link `/r/<id>` is the only credential; anyone who has it can join.
+   12 or 24 hours. The link `/r/<id>` is what you share. Whoever creates the room is its admin:
+   every other device that asks to join waits until the admin's browser accepts it, and the admin
+   sees each device's alias, IP address and approximate location (DB-IP's city database, bundled
+   into the image and queried offline; [IP Geolocation by DB-IP](https://db-ip.com), CC BY 4.0).
+   The admin can also reject, remove members and end the room.
 2. **Join.** Each device sends only a public key. The browser makes the key with a vendored
    [tweetnacl](https://tweetnacl.js.org/) (`nacl.box.keyPair()`, the X25519 keys WireGuard uses) and
    keeps the private key in `localStorage`; or, for a machine without a browser, make the key there

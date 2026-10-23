@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 
+from app.geo import Geo
 from app.models import create_db_and_tables, make_engine
 from app.relay import Relay
 from app.rooms import RoomError, RoomService
@@ -39,10 +40,11 @@ class NoStoreMiddleware:
         await self.app(scope, receive, send_no_store)
 
 
-def create_app(settings: Settings, relay=None) -> FastAPI:
+def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
     engine = make_engine(settings.DATABASE)
     relay = relay if relay is not None else Relay(settings)
-    rooms = RoomService(engine, settings, relay)
+    locate = locate if locate is not None else Geo(settings.GEOIP_DB).locate
+    rooms = RoomService(engine, settings, relay, locate=locate)
 
     async def sweeper(app: FastAPI):
         """Every SWEEP_SECONDS: end the rooms whose time is up. An error is logged, never fatal."""

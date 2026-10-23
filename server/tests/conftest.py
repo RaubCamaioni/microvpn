@@ -54,6 +54,11 @@ class FakeRelay:
         return len(self.opened)
 
 
+def fake_locate(ip: str) -> str:
+    """Stands in for app.geo.Geo.locate in tests: a deterministic, obviously fake place."""
+    return "" if not ip or ip == "unknown" else f"Testville, {ip}"
+
+
 @pytest.fixture
 def settings(tmp_path):
     return make_settings(DATABASE=str(tmp_path / "test.db"))
@@ -66,7 +71,7 @@ def relay():
 
 @pytest.fixture
 def app(settings, relay):
-    return create_app(settings, relay=relay)
+    return create_app(settings, relay=relay, locate=fake_locate)
 
 
 @pytest.fixture

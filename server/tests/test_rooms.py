@@ -8,6 +8,7 @@ from app.models import create_db_and_tables, make_engine
 from app.rooms import (
     DuplicateKey,
     Invalid,
+    MemberNotFound,
     RateLimited,
     RoomFull,
     RoomGone,
@@ -17,7 +18,7 @@ from app.rooms import (
     Unauthorized,
 )
 from app.wgconfig import PRIVATE_KEY_PLACEHOLDER
-from tests.conftest import FakeRelay, make_settings
+from tests.conftest import FakeRelay, fake_locate, make_settings
 
 
 def KEY(i):
@@ -36,7 +37,10 @@ def service(tmp_path, clock, name="r.db", **settings_over):
     engine = make_engine(str(tmp_path / name))
     create_db_and_tables(engine)
     relay = FakeRelay()
-    s = RoomService(engine, make_settings(**{"RELAY_PORT_RANGE": "30000-30009", **settings_over}), relay, now=lambda: clock.t)
+    s = RoomService(
+        engine, make_settings(**{"RELAY_PORT_RANGE": "30000-30009", **settings_over}), relay, now=lambda: clock.t,
+        locate=fake_locate,
+    )
     s.relay = relay
     return s
 
@@ -44,6 +48,17 @@ def service(tmp_path, clock, name="r.db", **settings_over):
 @pytest.fixture
 def svc(tmp_path, clock):
     return service(tmp_path, clock)
+
+
+async def admit(s, r, name, key):
+    """Join and have the admin accept: the member is then connected to everyone already accepted."""
+    m = await s.join(r.id, name, key)
+    await s.approve(r.id, r.owner_token, m.id)
+    return m
+
+
+def names(s, room_id, approved=True):
+    return [m.name for m in s.room_view(room_id).members if m.approved == approved]
 
 
 def test_create_room_fields_and_limits(svc, clock):
@@ -72,9 +87,9 @@ def test_global_room_cap(tmp_path, clock):
 
 async def test_join_assigns_addresses_pairs_and_ports(svc):
     r = svc.create_room("", 1, "ip")
-    a = await svc.join(r.id, "alice", KEY(1))
-    b = await svc.join(r.id, "bob", KEY(2))
-    c = await svc.join(r.id, "carol", KEY(3))
+    a = await admit(svc, r, "alice", KEY(1))
+    b = await admit(svc, r, "bob", KEY(2))
+    c = await admit(svc, r, "carol", KEY(3))
     base = r.subnet[: -len("0/24")]  # "10.x.y."
     assert (a.address, b.address, c.address) == (base + "2", base + "3", base + "4") and len(a.token) == 22
     assert len(svc.relay.opened) == 3 and all(30000 <= p <= 30009 for p in svc.relay.opened)
@@ -88,13 +103,13 @@ async def test_join_assigns_addresses_pairs_and_ports(svc):
 
 async def test_join_rejections(svc):
     r = svc.create_room("", 1, "ip")
-    await svc.join(r.id, "alice", KEY(1))
+    await admit(svc, r, "alice", KEY(1))
     with pytest.raises(DuplicateKey):
-        await svc.join(r.id, "alice2", KEY(1))
+        await admit(svc, r, "alice2", KEY(1))
     with pytest.raises(Invalid):
-        await svc.join(r.id, "bad\nname", KEY(2))
+        await admit(svc, r, "bad\nname", KEY(2))
     with pytest.raises(Invalid):
-        await svc.join(r.id, "ok", "not-a-key")
+        await admit(svc, r, "ok", "not-a-key")
     with pytest.raises(RoomGone):
         await svc.join("z" * 26, "ok", KEY(2))
     with pytest.raises(RoomGone):
@@ -104,29 +119,29 @@ async def test_join_rejections(svc):
 async def test_room_full(tmp_path, clock):
     s = service(tmp_path, clock, "f.db", ROOM_MAX_MEMBERS="2")
     r = s.create_room("", 1, "ip")
-    await s.join(r.id, "a", KEY(1))
-    await s.join(r.id, "b", KEY(2))
+    await admit(s, r, "a", KEY(1))
+    await admit(s, r, "b", KEY(2))
     with pytest.raises(RoomFull):
-        await s.join(r.id, "c", KEY(3))
+        await admit(s, r, "c", KEY(3))
 
 
 async def test_join_rolls_back_when_ports_run_out(tmp_path, clock):
     s = service(tmp_path, clock, "p.db", RELAY_PORT_RANGE="30000-30001")
     r = s.create_room("", 1, "ip")
-    await s.join(r.id, "a", KEY(1))
-    await s.join(r.id, "b", KEY(2))  # one pair, one of the two ports
+    await admit(s, r, "a", KEY(1))
+    await admit(s, r, "b", KEY(2))  # one pair, one of the two ports
     ab_port = set(s.relay.opened)
     with pytest.raises(ServerFull):
-        await s.join(r.id, "c", KEY(3))  # needs two ports, one is free
-    assert [m.name for m in s.room_view(r.id).members] == ["a", "b"]
+        await admit(s, r, "c", KEY(3))  # needs two ports, one is free
+    assert names(s, r.id) == ["a", "b"] and names(s, r.id, approved=False) == ["c"]  # c stays pending
     assert set(s.relay.opened) == ab_port and len(s.relay.closed) == 1  # the port c briefly took was closed
 
 
 async def test_leave_and_end_room_release_ports(svc):
     r = svc.create_room("", 1, "ip")
-    a = await svc.join(r.id, "a", KEY(1))
-    b = await svc.join(r.id, "b", KEY(2))
-    await svc.join(r.id, "c", KEY(3))
+    a = await admit(svc, r, "a", KEY(1))
+    b = await admit(svc, r, "b", KEY(2))
+    await admit(svc, r, "c", KEY(3))
     svc.leave(r.id, b.token)
     assert [m.name for m in svc.room_view(r.id).members] == ["a", "c"] and len(svc.relay.opened) == 1
     with pytest.raises(Unauthorized):
@@ -141,14 +156,14 @@ async def test_leave_and_end_room_release_ports(svc):
 
 async def test_expired_room_is_gone_before_sweep(svc, clock):
     r = svc.create_room("", 1, "ip")
-    a = await svc.join(r.id, "a", KEY(1))
+    a = await admit(svc, r, "a", KEY(1))
     clock.t += timedelta(hours=1, seconds=1)
     with pytest.raises(RoomGone):
         svc.room_view(r.id)
     with pytest.raises(RoomGone):
         svc.member_view(r.id, a.token)
     with pytest.raises(RoomGone):
-        await svc.join(r.id, "b", KEY(2))
+        await admit(svc, r, "b", KEY(2))
     assert svc.sweep() == 1 and svc.counts()["rooms"] == 0 and svc.sweep() == 0
 
 
@@ -158,9 +173,9 @@ async def test_restore_reopens_ports_and_skips_failures(tmp_path, clock):
     relay1 = FakeRelay()
     s1 = RoomService(engine, make_settings(RELAY_PORT_RANGE="30000-30009"), relay1, now=lambda: clock.t)
     r = s1.create_room("", 1, "ip")
-    await s1.join(r.id, "a", KEY(1))
-    await s1.join(r.id, "b", KEY(2))
-    await s1.join(r.id, "c", KEY(3))
+    await admit(s1, r, "a", KEY(1))
+    await admit(s1, r, "b", KEY(2))
+    await admit(s1, r, "c", KEY(3))
     ports = set(relay1.opened)
     relay2 = FakeRelay()
     relay2.fail_ports = {min(ports)}
@@ -178,7 +193,7 @@ async def test_concurrent_joins_get_distinct_addresses_and_pairs(tmp_path, clock
 
     s.relay.open = slow_open
     r = s.create_room("", 1, "ip")
-    members = await asyncio.gather(*(s.join(r.id, f"m{i}", KEY(i)) for i in range(1, 5)))
+    members = await asyncio.gather(*(admit(s, r, f"m{i}", KEY(i)) for i in range(1, 5)))
     assert len({m.address for m in members}) == 4
     assert len(s.relay.opened) == 6 and len({m.token for m in members}) == 4
     assert s.member_view(r.id, members[0].token).config_template.count("[Peer]") == 3
@@ -187,8 +202,8 @@ async def test_concurrent_joins_get_distinct_addresses_and_pairs(tmp_path, clock
 async def test_join_closes_its_ports_on_any_failure(tmp_path, clock):
     s = service(tmp_path, clock, "x.db")
     r = s.create_room("", 1, "ip")
-    await s.join(r.id, "a", KEY(1))
-    await s.join(r.id, "b", KEY(2))
+    await admit(s, r, "a", KEY(1))
+    await admit(s, r, "b", KEY(2))
     plain_open = s.relay.open
     calls = []
 
@@ -200,15 +215,15 @@ async def test_join_closes_its_ports_on_any_failure(tmp_path, clock):
 
     s.relay.open = flaky_open
     with pytest.raises(RuntimeError):
-        await s.join(r.id, "c", KEY(3))
-    assert [m.name for m in s.room_view(r.id).members] == ["a", "b"]
+        await admit(s, r, "c", KEY(3))
+    assert names(s, r.id) == ["a", "b"] and names(s, r.id, approved=False) == ["c"]
     assert len(s.relay.opened) == 1 and s.relay.closed == [calls[0]]
 
 
 async def test_relay_gets_the_pair_public_keys_on_join_and_restore(svc):
     r = svc.create_room("", 1, "ip")
-    await svc.join(r.id, "a", KEY(1))
-    await svc.join(r.id, "b", KEY(2))
+    await admit(svc, r, "a", KEY(1))
+    await admit(svc, r, "b", KEY(2))
     assert len(svc.relay.keys) == 1 and set(next(iter(svc.relay.keys.values()))) == {KEY(1), KEY(2)}
     relay2 = FakeRelay()
     s2 = RoomService(svc.engine, svc.settings, relay2, now=svc.now)
@@ -218,10 +233,78 @@ async def test_relay_gets_the_pair_public_keys_on_join_and_restore(svc):
 
 async def test_member_view_reports_relay_activity_and_bad_tokens(svc):
     r = svc.create_room("", 1, "ip")
-    a = await svc.join(r.id, "a", KEY(1))
-    await svc.join(r.id, "b", KEY(2))
+    a = await admit(svc, r, "a", KEY(1))
+    await admit(svc, r, "b", KEY(2))
     port = next(iter(svc.relay.opened))
     svc.relay.activity[port] = 2
     assert svc.member_view(r.id, a.token).peers[0].slots_active == 2
     with pytest.raises(Unauthorized):
         svc.member_view(r.id, "nope")
+
+
+async def test_joins_wait_for_the_admin(svc):
+    r = svc.create_room("", 1, "ip")
+    a = await admit(svc, r, "admin-pc", KEY(1))
+    b = await svc.join(r.id, "stranger", KEY(2))
+    assert names(svc, r.id) == ["admin-pc"] and names(svc, r.id, approved=False) == ["stranger"]
+    assert svc.relay.opened == {}  # no pair until accepted
+    pending = svc.member_view(r.id, b.token)
+    assert pending.approved is False and pending.peers == [] and pending.config_template == ""
+    assert svc.member_view(r.id, a.token).peers == []  # the admin does not see the stranger as a peer yet
+    await svc.approve(r.id, r.owner_token, b.id)
+    assert names(svc, r.id) == ["admin-pc", "stranger"] and len(svc.relay.opened) == 1
+    assert svc.member_view(r.id, b.token).approved
+    assert [p.name for p in svc.member_view(r.id, a.token).peers] == ["stranger"]
+    await svc.approve(r.id, r.owner_token, b.id)  # a second approval changes nothing
+    assert len(svc.relay.opened) == 1
+
+
+async def test_admin_token_on_join_accepts_immediately(svc):
+    r = svc.create_room("", 1, "ip")
+    a = await svc.join(r.id, "admin-pc", KEY(1), owner_token=r.owner_token)
+    assert names(svc, r.id) == ["admin-pc"] and svc.member_view(r.id, a.token).approved
+    with pytest.raises(Unauthorized):
+        await svc.join(r.id, "x", KEY(2), owner_token="wrong")
+
+
+async def test_only_the_admin_approves_rejects_or_removes(svc):
+    r = svc.create_room("", 1, "ip")
+    a = await admit(svc, r, "a", KEY(1))
+    b = await svc.join(r.id, "b", KEY(2))
+    with pytest.raises(Unauthorized):
+        await svc.approve(r.id, a.token, b.id)
+    with pytest.raises(Unauthorized):
+        svc.remove_member(r.id, "nope", b.id)
+    with pytest.raises(MemberNotFound):
+        await svc.approve(r.id, r.owner_token, 9999)
+    svc.remove_member(r.id, r.owner_token, b.id)  # reject
+    assert names(svc, r.id, approved=False) == []
+    with pytest.raises(Unauthorized):
+        svc.member_view(r.id, b.token)  # the rejected device is gone
+    c = await admit(svc, r, "c", KEY(3))
+    assert len(svc.relay.opened) == 1
+    svc.remove_member(r.id, r.owner_token, c.id)  # kick an accepted member: its pair closes
+    assert names(svc, r.id) == ["a"] and svc.relay.opened == {} and len(svc.relay.closed) == 1
+
+
+async def test_pending_members_count_toward_the_room_size(tmp_path, clock):
+    s = service(tmp_path, clock, "pend.db", ROOM_MAX_MEMBERS="2")
+    r = s.create_room("", 1, "ip")
+    await admit(s, r, "a", KEY(1))
+    await s.join(r.id, "b", KEY(2))
+    with pytest.raises(RoomFull):
+        await s.join(r.id, "c", KEY(3))
+
+
+async def test_admin_view_shows_alias_address_and_location(svc):
+    r = svc.create_room("", 1, "ip")
+    a = await svc.join(r.id, "admin-pc", KEY(1), owner_token=r.owner_token, client_ip="203.0.113.7")
+    b = await svc.join(r.id, "phone", KEY(2), client_ip="198.51.100.9")
+    with pytest.raises(Unauthorized):
+        svc.admin_view(r.id, a.token)
+    view = svc.admin_view(r.id, r.owner_token)
+    rows = [(m.name, m.approved, m.joined_ip, m.location) for m in view.members]
+    assert rows == [("admin-pc", True, "203.0.113.7", "Testville, 203.0.113.7"), ("phone", False, "198.51.100.9", "Testville, 198.51.100.9")]
+    assert [m.id for m in view.members] == [a.id, b.id]
+    # the public view never carries addresses or places
+    assert not hasattr(svc.room_view(r.id).members[0], "joined_ip")

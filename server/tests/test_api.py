@@ -34,14 +34,25 @@ def test_per_ip_limit_uses_x_real_ip(client):
 
 def test_join_state_me_leave_end(client):
     room = create(client).json()
-    j = client.post(f"/r/{room['id']}/members", json={"name": "alice", "public_key": KEY(1)})
+    owner = {"Authorization": "Bearer " + room["owner_token"]}
+    j = client.post(f"/r/{room['id']}/members", json={"name": "alice", "public_key": KEY(1)}, headers=owner)
     assert j.status_code == 201 and j.json()["address"].endswith(".2") and len(j.json()["member_token"]) == 22
+    assert j.json()["approved"] is True  # the admin's own device
     assert client.post(f"/r/{room['id']}/members", json={"name": "x", "public_key": KEY(1)}).status_code == 409
     assert client.post(f"/r/{room['id']}/members", json={"name": "x", "public_key": "bad"}).status_code == 400
-    client.post(f"/r/{room['id']}/members", json={"name": "bob", "public_key": KEY(2)})
+    bob = client.post(f"/r/{room['id']}/members", json={"name": "bob", "public_key": KEY(2)}).json()
+    assert bob["approved"] is False
     state = client.get(f"/r/{room['id']}/state").json()
-    assert [m["name"] for m in state["members"]] == ["alice", "bob"] and state["max_members"] == 8
+    assert [(m["name"], m["approved"]) for m in state["members"]] == [("alice", True), ("bob", False)]
+    assert all("id" in m for m in state["members"]) and state["max_members"] == 8
     auth = {"Authorization": "Bearer " + j.json()["member_token"]}
+    bob_auth = {"Authorization": "Bearer " + bob["member_token"]}
+    waiting = client.get(f"/r/{room['id']}/me", headers=bob_auth).json()
+    assert waiting["approved"] is False and waiting["peers"] == [] and waiting["config_template"] == ""
+    bob_id = state["members"][1]["id"]
+    assert client.post(f"/r/{room['id']}/members/{bob_id}/approve", headers=auth).status_code == 401
+    assert client.post(f"/r/{room['id']}/members/{bob_id}/approve", headers=owner).status_code == 204
+    assert client.post(f"/r/{room['id']}/members/4242/approve", headers=owner).status_code == 404
     me = client.get(f"/r/{room['id']}/me", headers=auth)
     assert me.status_code == 200 and me.json()["peers"][0]["name"] == "bob"
     assert "__PRIVATE_KEY__" in me.json()["config_template"]
@@ -49,10 +60,12 @@ def test_join_state_me_leave_end(client):
     assert conf.headers["content-type"].startswith("text/plain") and conf.text == me.json()["config_template"]
     assert client.get(f"/r/{room['id']}/me").status_code == 401
     assert client.get(f"/r/{room['id']}/me", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert client.delete(f"/r/{room['id']}/members/{bob_id}", headers=auth).status_code == 401
+    assert client.delete(f"/r/{room['id']}/members/{bob_id}", headers=owner).status_code == 204  # kicked
+    assert client.get(f"/r/{room['id']}/me", headers=bob_auth).status_code == 401
     assert client.delete(f"/r/{room['id']}/me", headers=auth).status_code == 204
-    assert [m["name"] for m in client.get(f"/r/{room['id']}/state").json()["members"]] == ["bob"]
+    assert client.get(f"/r/{room['id']}/state").json()["members"] == []
     assert client.delete(f"/r/{room['id']}", headers=auth).status_code == 401
-    owner = {"Authorization": "Bearer " + room["owner_token"]}
     assert client.delete(f"/r/{room['id']}", headers=owner).status_code == 204
     assert client.get(f"/r/{room['id']}/state").status_code == 404
     assert client.get("/r/zzzz/state").status_code == 404
@@ -60,11 +73,28 @@ def test_join_state_me_leave_end(client):
 
 def test_healthz_counts_live_state(client):
     room = create(client).json()
-    client.post(f"/r/{room['id']}/members", json={"name": "a", "public_key": KEY(1)})
-    client.post(f"/r/{room['id']}/members", json={"name": "b", "public_key": KEY(2)})
+    owner = {"Authorization": "Bearer " + room["owner_token"]}
+    client.post(f"/r/{room['id']}/members", json={"name": "a", "public_key": KEY(1)}, headers=owner)
+    client.post(f"/r/{room['id']}/members", json={"name": "b", "public_key": KEY(2)}, headers=owner)
     assert client.get("/healthz").json() == {"rooms": 1, "members": 2, "ports_in_use": 1, "relay": "ok"}
 
 
 def test_join_script_endpoint_is_gone(client):
     room = create(client).json()
     assert client.get(f"/r/{room['id']}/join.sh").status_code == 404
+
+
+def test_admin_endpoint_shows_ip_and_location_to_the_owner_only(client):
+    room = create(client).json()
+    owner = {"Authorization": "Bearer " + room["owner_token"]}
+    client.post(f"/r/{room['id']}/members", json={"name": "admin-pc", "public_key": KEY(1)}, headers={**owner, "X-Real-IP": "203.0.113.7"})
+    client.post(f"/r/{room['id']}/members", json={"name": "phone", "public_key": KEY(2)}, headers={"X-Real-IP": "198.51.100.9"})
+    assert client.get(f"/r/{room['id']}/admin").status_code == 401
+    assert client.get(f"/r/{room['id']}/admin", headers={"Authorization": "Bearer nope"}).status_code == 401
+    view = client.get(f"/r/{room['id']}/admin", headers=owner).json()
+    assert [(m["name"], m["approved"], m["joined_ip"], m["location"]) for m in view["members"]] == [
+        ("admin-pc", True, "203.0.113.7", "Testville, 203.0.113.7"),
+        ("phone", False, "198.51.100.9", "Testville, 198.51.100.9"),
+    ]
+    public = client.get(f"/r/{room['id']}/state").json()
+    assert "joined_ip" not in public["members"][0] and "location" not in public["members"][0]

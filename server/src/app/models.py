@@ -6,7 +6,7 @@ rejects naive values); use utcnow().
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Engine, UniqueConstraint
+from sqlalchemy import Engine, UniqueConstraint, text
 from sqlmodel import Field, SQLModel, create_engine
 
 
@@ -34,6 +34,11 @@ class Member(SQLModel, table=True):
     address: str
     token: str = Field(index=True)
     created_at: datetime
+    # False until the room's admin (its creator) accepts the device; pending members have no pairs
+    approved: bool = False
+    # where the join came from, shown to the admin only
+    joined_ip: str = ""
+    location: str = ""
 
 
 class Pair(SQLModel, table=True):
@@ -50,3 +55,24 @@ def make_engine(database: str) -> Engine:
 
 def create_db_and_tables(engine: Engine) -> None:
     SQLModel.metadata.create_all(engine)
+    _add_missing_columns(engine)
+
+
+# columns added after the first release, with the value an older row gets: SQLite's create_all never
+# alters a table that exists, so a deploy over an existing database adds them here
+_ADDED_COLUMNS = {
+    "member": [
+        ("approved", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("joined_ip", "VARCHAR NOT NULL DEFAULT ''"),
+        ("location", "VARCHAR NOT NULL DEFAULT ''"),
+    ],
+}
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    with engine.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            present = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+            for name, definition in columns:
+                if name not in present:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))

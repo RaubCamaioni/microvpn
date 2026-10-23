@@ -26,6 +26,8 @@ class Settings:
     SWEEP_SECONDS: float = 30.0
     # the proxies whose X-Forwarded-* / X-Real-IP headers uvicorn trusts (nginx on the Docker network)
     FORWARDED_ALLOW_IPS: str = "172.18.0.0/16"
+    # the DB-IP city database the image bundles; blank locations when the file is missing
+    GEOIP_DB: str = "/usr/share/dbip/dbip-city-lite.mmdb"
 
     @property
     def http_host(self) -> str:
@@ -49,7 +51,7 @@ class Settings:
                     raise ValueError(f"Malformed environment variable {name}={env[name]!r}: {e}") from e
 
         take("ROOT_PATH", lambda v: v.rstrip("/"))
-        for name in ("PUBLIC_URL", "RELAY_HOST", "RELAY_BIND", "FORWARDED_ALLOW_IPS"):
+        for name in ("PUBLIC_URL", "RELAY_HOST", "RELAY_BIND", "FORWARDED_ALLOW_IPS", "GEOIP_DB"):
             take(name, str)
         take("HTTP_BIND", _parse_bind)
         take("RELAY_PORT_RANGE", _parse_port_range)

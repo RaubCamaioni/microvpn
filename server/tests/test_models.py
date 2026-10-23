@@ -31,6 +31,22 @@ def test_tables_round_trip(tmp_path):
     assert utcnow().tzinfo is not None
 
 
+def test_startup_adds_columns_missing_from_an_older_database(tmp_path):
+    from sqlalchemy import text
+
+    engine = make_engine(str(tmp_path / "old.db"))
+    with engine.begin() as conn:  # the member table of the first release: no approved / joined_ip / location
+        conn.execute(text("CREATE TABLE room (id VARCHAR PRIMARY KEY, name VARCHAR, subnet VARCHAR, created_at DATETIME, expires_at DATETIME, owner_token VARCHAR)"))
+        conn.execute(text("CREATE TABLE member (id INTEGER PRIMARY KEY, room_id VARCHAR, name VARCHAR, public_key VARCHAR, address VARCHAR, token VARCHAR, created_at DATETIME)"))
+        conn.execute(text("INSERT INTO room VALUES ('r', '', '10.1.1.0/24', '2026-01-01 00:00:00+00:00', '2026-01-01 01:00:00+00:00', 'o')"))
+        conn.execute(text("INSERT INTO member (room_id, name, public_key, address, token, created_at) VALUES ('r', 'n', 'k', '10.1.1.2', 't', '2026-01-01 00:00:00+00:00')"))
+    create_db_and_tables(engine)
+    with Session(engine) as s:
+        m = s.exec(select(Member)).one()
+        assert m.approved is False and m.joined_ip == "" and m.location == ""
+    create_db_and_tables(engine)  # idempotent
+
+
 def test_a_public_key_or_address_cannot_repeat_within_a_room(tmp_path):
     import pytest
     from sqlalchemy.exc import IntegrityError
