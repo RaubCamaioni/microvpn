@@ -55,6 +55,7 @@ def test_room_page_and_gone_page(client):
     assert 'id="requests"' in page and "pending requests/" in page and "no pending requests" in page
     assert "locations are approximate" not in page and "accept connects" not in page
     assert "db-ip.com" in page  # the licence's attribution link, in the note at the bottom
+    assert "end the room and make a new one" in page
     assert 'id="extend-form"' in page and 'name="lifetime"' in page
     assert 'id="admin-bar"' in page and "[ADMIN]" in page and 'id="expires"' in page
     assert page.index('class="title"') < page.index('id="expires"') < page.index('id="member-count"') < page.index('id="room-link"')

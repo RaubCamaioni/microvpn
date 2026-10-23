@@ -79,6 +79,9 @@ def test_admin_actions_work_with_the_creator_cookie_alone(client):
     assert stranger["approved"] is False
     admin = client.get(f"/r/{room['id']}/admin", headers=ip).json()
     sid = [m["id"] for m in admin["members"] if m["name"] == "x"][0]
-    assert client.post(f"/r/{room['id']}/members/{sid}/approve", headers=ip).status_code == 204
-    assert client.delete(f"/r/{room['id']}/members/{sid}", headers=ip).status_code == 204
+    assert client.delete(f"/r/{room['id']}/members/{sid}", headers=ip).status_code == 204  # reject by cookie
+    sid2 = client.post(f"/r/{room['id']}/members", json={"name": "y", "public_key": KEY(3)}, headers={"X-Real-IP": "198.51.100.9"})
+    admin = client.get(f"/r/{room['id']}/admin", headers=ip).json()
+    sid2 = [m["id"] for m in admin["members"] if m["name"] == "y"][0]
+    assert client.post(f"/r/{room['id']}/members/{sid2}/approve", headers=ip).status_code == 204  # accept by cookie
     assert stranger_browser.get(f"/r/{room['id']}/admin", headers={"X-Real-IP": "198.51.100.1"}).status_code == 401
