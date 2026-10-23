@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 
+from app.models import create_db_and_tables, make_engine
 from app.routes import api, pages
 from app.settings import Settings
 from app.templating import WEBAPP
@@ -32,13 +33,17 @@ class NoStoreMiddleware:
 
 
 def create_app(settings: Settings, relay=None) -> FastAPI:
+    engine = make_engine(settings.DATABASE)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        create_db_and_tables(engine)
         yield
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.relay = relay
+    app.state.engine = engine
     app.add_middleware(NoStoreMiddleware)
     app.mount("/static", StaticFiles(directory=WEBAPP / "static"), name="static")
     app.include_router(api.router)
