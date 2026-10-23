@@ -25,7 +25,7 @@
       var qr = qrcode(0, "M");
       qr.addData(text);
       qr.make();
-      el["overlay-qr"].innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
+      el["overlay-qr"].innerHTML = qr.createSvgTag({ cellSize: 8, margin: 2 });
     } catch (e) {
       el["overlay-qr"].textContent = "too large for a QR code";
     }
@@ -391,12 +391,12 @@
   });
   el["link-qr"].addEventListener("click", function (event) {
     event.preventDefault();
-    showQr(roomLink(), "scan to open this room on another device");
+    showQr(roomLink(), "Scan to Join");
   });
   el["config-qr"].addEventListener("click", function (event) {
     event.preventDefault();
     if (!configText) return;
-    showQr(configText, "scan with the WireGuard app: + → Scan from QR code");
+    showQr(configText, "Scan with the WireGuard app");
     markDownloaded();
   });
   el.leave.addEventListener("click", function (event) { event.preventDefault(); leave(); });
