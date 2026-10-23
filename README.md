@@ -16,15 +16,17 @@ behind it are in `docs/superpowers/specs/2026-10-22-microvpn-design.md`.
 
 1. **Create.** The front page makes a room with a random 26-character id and a lifetime of 1, 4,
    12 or 24 hours. The link `/r/<id>` is the only credential; anyone who has it can join.
-2. **Join.** Each device generates its own WireGuard key and sends only the public key:
-   - in the browser, with a vendored [tweetnacl](https://tweetnacl.js.org/) (`nacl.box.keyPair()`,
-     whose keys are the X25519 keys WireGuard uses); the private key stays in `localStorage`;
-   - from a shell: `curl -sS https://raubcamaioni.com/microvpn/r/<id>/join.sh | sh -s -- <device-name>`
-     runs `wg genkey` locally, registers the public key and writes `mv<short>.conf` beside it.
+2. **Join.** Each device sends only a public key. The browser makes the key with a vendored
+   [tweetnacl](https://tweetnacl.js.org/) (`nacl.box.keyPair()`, the X25519 keys WireGuard uses) and
+   keeps the private key in `localStorage`; or, for a machine without a browser, make the key there
+   with `wg genkey | tee private.key | wg pubkey` and paste the public key into the join form.
 3. **Configure.** The server renders the member's config with every other member as a peer and
-   `PrivateKey = __PRIVATE_KEY__`; the browser or the script substitutes the local key. The page
-   shows the text, a download, a QR code drawn in the browser, and the shell line. Because the
-   peer list is baked into the file, the page marks a downloaded config stale when members change.
+   `PrivateKey = __PRIVATE_KEY__`; the browser substitutes the local key (a member who brought their
+   own key fills it in). The page shows the text, a download, a QR code for the phone apps, a QR
+   code of the room link itself for inviting another device, and on iOS and macOS an
+   `[add to WireGuard]` action that saves an Apple configuration profile (built in the browser, in
+   the format the WireGuard project documents). Because the peer list is baked into the file, the
+   page marks a downloaded config stale when members change.
 4. **Relay.** Every pair of members gets its own UDP port on the server. Both send their WireGuard
    packets to it, and the server forwards what one side sends to the other side's last-seen
    address. WireGuard's handshake runs between the two members through that port, so the server

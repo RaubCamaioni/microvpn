@@ -8,29 +8,50 @@
   <h1>{{ room.name or 'room ' ~ room.id[:8] }}</h1>
   <p><span id="expires">expires in …</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members
      · <a href="#" id="copy-link">[copy link]</a></p>
+  <div class="share">
+    <div id="room-qr" class="qr"></div>
+    <p class="dim">scan to open this room on another device, then join from there.</p>
+  </div>
 </section>
 
 <section id="join">
   <form id="join-form" autocomplete="off">
     <label>this device's name <input name="name" maxlength="32" required placeholder="rob-laptop"></label>
+    <label>public key <input name="public_key" maxlength="44" size="46" placeholder="optional: your own key, see below"></label>
     <button type="submit">[join]</button>
   </form>
   <p id="join-error" class="error" hidden></p>
+  <p class="dim">leave the public key empty and this browser makes the key for you; it never leaves this device.</p>
 </section>
 
 <section id="config" hidden>
   <h2>your config <span id="peer-count" class="dim"></span></h2>
   <p id="stale" class="stale" hidden>members changed since your last download or copy: import the config again to reach them.</p>
-  <p class="actions"><a href="#" id="download">[download]</a> <a href="#" id="copy">[copy]</a> <a href="#" id="leave">[leave]</a></p>
+  <p class="actions"><a href="#" id="download">[download]</a> <a href="#" id="copy">[copy]</a>
+     <a href="#" id="add-apple" hidden>[add to WireGuard]</a> <a href="#" id="leave">[leave]</a></p>
+  <p id="platform-hint" class="dim"></p>
   <pre id="config-text"></pre>
-  <div id="qr"></div>
+  <div id="qr" class="qr"></div>
   <p class="dim">scan with the WireGuard app on Android or iOS; on desktop import the downloaded file.</p>
 </section>
 
-<section id="cli">
-  <h2>from a shell</h2>
-  <pre>curl -sS {{ settings.PUBLIC_URL }}/r/{{ room.id }}/join.sh | sh -s -- &lt;device-name&gt;</pre>
-  <p class="dim">needs wg and curl; the key is made on that machine and never sent.</p>
+<section id="steps">
+  <h2>with the WireGuard app</h2>
+  <ol>
+    <li>Install WireGuard from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.</li>
+    <li>Join above with a name for this device, then get the config into the app:
+      <span class="dim">Windows, macOS, Linux:</span> [download], then in the app <em>Add Tunnel → Import tunnel(s) from file</em>;
+      <span class="dim">Android, iOS:</span> in the app <em>+ → Scan from QR code</em> and point it at the code above;
+      <span class="dim">iPhone, iPad, Mac:</span> [add to WireGuard] saves a profile that installs through Settings.</li>
+    <li>Activate the tunnel. Members reach each other on their 10.x.y.z addresses.</li>
+    <li>When someone joins later, import the config again: it only lists the members present when it was made.</li>
+  </ol>
+  <h2>your own key</h2>
+  <p>To keep the private key on a machine without a browser, make the key there and join with its public half:</p>
+  <pre>wg genkey | tee private.key | wg pubkey</pre>
+  <p class="dim">paste the printed public key into the join form; the config then shows <code>PrivateKey = __PRIVATE_KEY__</code>
+     for you to replace with the contents of private.key. WireGuard for Windows does the same with
+     <em>Add empty tunnel</em>: copy its public key here, then paste the rest of the config into that tunnel.</p>
 </section>
 
 <section id="peers">
@@ -47,5 +68,6 @@ your public IP address and traffic timing.</p>
 {% block scripts %}
 <script src="{{ root_path }}/static/vendor/nacl-fast.min.js"></script>
 <script src="{{ root_path }}/static/vendor/qrcode.js"></script>
+<script src="{{ root_path }}/static/mobileconfig.js?v={{ static_version }}"></script>
 <script src="{{ root_path }}/static/room.js?v={{ static_version }}"></script>
 {% endblock %}

@@ -63,3 +63,8 @@ def test_healthz_counts_live_state(client):
     client.post(f"/r/{room['id']}/members", json={"name": "a", "public_key": KEY(1)})
     client.post(f"/r/{room['id']}/members", json={"name": "b", "public_key": KEY(2)})
     assert client.get("/healthz").json() == {"rooms": 1, "members": 2, "ports_in_use": 1, "relay": "ok"}
+
+
+def test_join_script_endpoint_is_gone(client):
+    room = create(client).json()
+    assert client.get(f"/r/{room['id']}/join.sh").status_code == 404
