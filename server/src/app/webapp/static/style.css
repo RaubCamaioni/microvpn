@@ -61,7 +61,7 @@ button:hover, button:focus-visible { background: var(--paper); color: var(--ink)
 .tabs { display: flex; gap: 1ch; margin: 1rem 0 0.5rem; }
 .tabs a.active { background: var(--paper); color: var(--ink); }
 details { margin: 1.5rem 0; }
-summary { cursor: pointer; list-style: none; }
+summary { cursor: pointer; list-style: none; display: inline-block; }  /* only the text highlights */
 summary::-webkit-details-marker { display: none; }
 summary:hover { background: var(--paper); color: var(--ink); }
 details[open] summary { margin-bottom: 0.5rem; }
@@ -81,3 +81,9 @@ details[open] summary { margin-bottom: 0.5rem; }
   color: var(--dim); border-left: 1px solid var(--line); border-top: 1px solid var(--line); background: var(--ink);
 }
 @media (max-width: 640px) { #peer-list li { grid-template-columns: 2ch 1fr; } }
+.headline { display: flex; flex-wrap: wrap; gap: 0.25rem 1ch; align-items: baseline; margin: 0 0 0.5rem; }
+.headline .title { font-size: 1.1rem; font-weight: bold; }
+#admin-bar { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 1ch; align-items: baseline; }
+#admin-bar[hidden] { display: none; }
+#admin-bar form { margin: 0; display: inline-flex; gap: 0.25rem 1ch; }
+.badge { font-weight: bold; }

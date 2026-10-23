@@ -6,10 +6,21 @@
       data-admin="{{ '1' if is_admin else '0' }}"{% endblock %}
 {% block content %}
 <section id="room-header">
-  <h1>{{ room.name or 'room ' ~ room.id[:8] }}</h1>
+  <p class="headline"><span class="title">{{ room.name or 'room ' ~ room.id[:8] }}</span>
+     <span class="dim">· <span id="expires">expires in …</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members</span>
+     <span id="admin-bar" {% if not is_admin %}hidden{% endif %}><span class="badge">[ADMIN]</span>
+       <form id="extend-form" autocomplete="off">
+         <label>lifetime
+           <select name="lifetime">
+             {% for h in settings.ROOM_LIFETIMES %}<option value="{{ h }}">{{ h }} hour{{ '' if h == 1 else 's' }}</option>{% endfor %}
+           </select>
+         </label>
+         <button type="submit" title="start the lifetime again from now">[extend]</button>
+         <a href="#" id="end-room">[end room]</a>
+       </form>
+     </span></p>
   <p class="link"><code id="room-link">{{ settings.PUBLIC_URL }}/r/{{ room.id }}</code>
      <a href="#" id="copy-link">[copy link]</a> <a href="#" id="link-qr">[QR]</a></p>
-  <p><span id="expires">expires in …</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members</p>
 </section>
 
 {# the QR overlay: the room link, or the config for the WireGuard app; [x], Escape or a click outside closes it #}
@@ -27,10 +38,16 @@
     <a href="#" data-tab="terminal">[key in terminal]</a>
   </nav>
   <div id="tab-terminal-help" hidden>
-    <p>Make the key where it will be used, then join with its public half:</p>
-    <pre>wg genkey | tee private.key | wg pubkey</pre>
-    <p class="dim">the config you get back keeps <code>PrivateKey = __PRIVATE_KEY__</code> for you to replace with the
-       contents of private.key.</p>
+    <ol>
+      <li>On the machine that will use the tunnel, install wireguard-tools (<code>apt install wireguard-tools</code>,
+          <code>brew install wireguard-tools</code>, or the WireGuard app, which ships <code>wg</code>).</li>
+      <li>Make the key pair there. The private half stays in private.key; the command prints the public half:
+          <pre>wg genkey | tee private.key | wg pubkey</pre></li>
+      <li>Paste the printed public key into the field below and join.</li>
+      <li>In the config you get back, replace <code>PrivateKey = __PRIVATE_KEY__</code> with the contents of private.key,
+          then import it. (WireGuard for Windows: <em>Add empty tunnel</em> makes a key pair too; copy its public key
+          here and paste the rest of the config into that tunnel.)</li>
+    </ol>
   </div>
   <form id="join-form" autocomplete="off">
     <label>this device's name <input name="name" maxlength="32" required placeholder="rob-laptop"></label>
@@ -69,19 +86,6 @@
   <h2>members</h2>
   <ul id="peer-list"></ul>
   <p class="dim" id="peers-legend" hidden>relay sees: ○ neither side · ◐ one side · ● both sides (last 30 s)</p>
-</section>
-
-<section id="owner" hidden>
-  <p class="dim">admin: this browser created the room.</p>
-  <form id="extend-form" autocomplete="off">
-    <label>lifetime
-      <select name="lifetime">
-        {% for h in settings.ROOM_LIFETIMES %}<option value="{{ h }}">{{ h }} hour{{ '' if h == 1 else 's' }}</option>{% endfor %}
-      </select>
-    </label>
-    <button type="submit" title="start the lifetime again from now">[extend]</button>
-    <a href="#" id="end-room">[end room]</a>
-  </form>
 </section>
 
 <details id="install">
