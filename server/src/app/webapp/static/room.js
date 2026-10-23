@@ -16,7 +16,7 @@
 
   var el = {};
   ["expires", "member-count", "copy-link", "link-qr", "room-link", "profile-form", "profile-error", "profile-list",
-   "platform-hint", "peer-list", "end-room", "requests", "request-list", "extend-form", "admin-bar",
+   "platform-hint", "peer-list", "members-hint", "end-room", "requests", "request-list", "extend-form", "admin-bar",
    "overlay", "overlay-close", "overlay-qr", "overlay-caption"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
 
@@ -217,15 +217,7 @@
       row.appendChild(link("[reject]", function () { adminAction("DELETE", "/members/" + m.id); }));
       el["request-list"].appendChild(row);
     });
-    // a [remove] beside every accepted member in the members list
-    var accepted = {};
-    admin.members.forEach(function (m) { if (m.approved) accepted[m.public_key] = m; });
-    Array.prototype.forEach.call(el["peer-list"].querySelectorAll("li[data-key]"), function (li) {
-      var m = accepted[li.dataset.key];
-      if (!m || li.querySelector("a")) return;
-      li.lastChild.appendChild(document.createTextNode(" "));
-      li.lastChild.appendChild(link("[remove]", function () { adminAction("DELETE", "/members/" + m.id); }));
-    });
+    el["members-hint"].hidden = false;
   }
 
   var lastState = null, lastAdmin = null;

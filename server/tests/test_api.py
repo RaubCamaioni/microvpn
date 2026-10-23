@@ -62,9 +62,11 @@ def test_join_state_me_leave_end(client):
     assert client.get(f"/r/{room['id']}/me").status_code == 401
     assert client.get(f"/r/{room['id']}/me", headers={"Authorization": "Bearer nope"}).status_code == 401
     assert client.delete(f"/r/{room['id']}/members/{bob_id}", headers=auth).status_code == 401
-    assert client.delete(f"/r/{room['id']}/members/{bob_id}", headers=owner).status_code == 204  # kicked
-    assert client.get(f"/r/{room['id']}/me", headers=bob_auth).status_code == 401
+    kick = client.delete(f"/r/{room['id']}/members/{bob_id}", headers=owner)
+    assert kick.status_code == 409 and "new one" in kick.json()["detail"]  # accepted members are not kicked
+    assert client.get(f"/r/{room['id']}/me", headers=bob_auth).status_code == 200
     assert client.delete(f"/r/{room['id']}/me", headers=auth).status_code == 204
+    assert client.delete(f"/r/{room['id']}/me", headers=bob_auth).status_code == 204
     assert client.get(f"/r/{room['id']}/state").json()["members"] == []
     assert client.delete(f"/r/{room['id']}", headers=auth).status_code == 401
     assert client.delete(f"/r/{room['id']}", headers=owner).status_code == 204

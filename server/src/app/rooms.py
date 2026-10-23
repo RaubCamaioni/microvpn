@@ -74,6 +74,10 @@ class MemberNotFound(RoomError):
     status, detail = 404, "no such member in this room"
 
 
+class CannotKick(RoomError):
+    status, detail = 409, "an accepted member is not removed one by one: end the room and make a new one"
+
+
 class RelayPorts(Protocol):
     """What the service needs from app.relay.Relay (tests substitute a double)."""
 
@@ -336,12 +340,15 @@ class RoomService:
             await self._connect_locked(room_id, member_id)
 
     def remove_member(self, room_id: str, owner_token: str | None, member_id: int, visitor_id: str = "") -> None:
-        """Reject a pending device or kick an accepted one: its pairs close and its row goes."""
+        """Reject a pending device. An accepted member is never kicked one by one: every other member
+        would have to re-import to truly drop its key, so the rule is to end the room and make a new one."""
         with self._session() as s:
             room = self._admin_room(s, room_id, owner_token, visitor_id)
             member = s.get(Member, member_id)
             if member is None or member.room_id != room.id:
                 raise MemberNotFound()
+            if member.approved:
+                raise CannotKick()
             self._drop_member(s, room, member)
             s.commit()
 

@@ -6,6 +6,7 @@ import pytest
 
 from app.models import create_db_and_tables, make_engine
 from app.rooms import (
+    CannotKick,
     DuplicateKey,
     Invalid,
     MemberNotFound,
@@ -283,8 +284,9 @@ async def test_only_the_admin_approves_rejects_or_removes(svc):
         svc.member_view(r.id, b.token)  # the rejected device is gone
     c = await admit(svc, r, "c", KEY(3))
     assert len(svc.relay.opened) == 1
-    svc.remove_member(r.id, r.owner_token, c.id)  # kick an accepted member: its pair closes
-    assert names(svc, r.id) == ["a"] and svc.relay.opened == {} and len(svc.relay.closed) == 1
+    with pytest.raises(CannotKick):  # an accepted member is not kicked: end the room and make a new one
+        svc.remove_member(r.id, r.owner_token, c.id)
+    assert names(svc, r.id) == ["a", "c"] and len(svc.relay.opened) == 1
 
 
 async def test_pending_members_count_toward_the_room_size(tmp_path, clock):
@@ -343,7 +345,7 @@ async def test_released_ports_are_retired_until_the_room_ends(tmp_path, clock):
     a = await admit(s, r, "a", KEY(1))
     b = await admit(s, r, "b", KEY(2))
     first = set(s.relay.opened)
-    s.remove_member(r.id, r.owner_token, b.id)  # frees the (a, b) port: a kicked device still points at it
+    s.leave(r.id, b.token)  # frees the (a, b) port: the device that left still points at it
     assert s.relay.opened == {}
     c = await admit(s, r, "c", KEY(3))
     assert not (set(s.relay.opened) & first)  # the (a, c) pair got a different port
@@ -352,7 +354,7 @@ async def test_released_ports_are_retired_until_the_room_ends(tmp_path, clock):
     # a second service on the same database (a restart) still refuses the retired port
     s2 = RoomService(s.engine, s.settings, FakeRelay(), now=lambda: clock.t, locate=fake_locate)
     await s2.restore()
-    s2.remove_member(r.id, r.owner_token, c.id)  # a second retired port
+    s2.leave(r.id, c.token)  # a second retired port
     e = await s2.join(r.id, "e", KEY(5), owner_token=r.owner_token)  # (a, e) takes the one port left
     assert set(s2.relay.opened) == {30000, 30001, 30002} - first - {next(iter(set(s2.relay.closed)))}
     with pytest.raises(ServerFull):  # (a, f) and (e, f): nothing left, retired ports stay retired
