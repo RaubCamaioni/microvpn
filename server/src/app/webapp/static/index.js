@@ -29,7 +29,7 @@
       return;
     }
     try { localStorage.setItem("microvpn:" + json.id + ":owner", json.owner_token); } catch (e) { /* private mode */ }
-    location.href = root + "/r/" + json.id;
+    location.reload();  // the room appears in the tree; the reader opens it when ready
   });
 
   // [delete] beside a room this browser created: the cookie is the authority, no token needed

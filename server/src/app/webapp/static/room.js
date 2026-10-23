@@ -13,10 +13,42 @@
   var POLL_MS = 5000;
 
   var el = {};
-  ["expires", "member-count", "copy-link", "join", "join-form", "join-error", "config", "peer-count", "stale",
-   "download", "copy", "leave", "config-text", "qr", "room-qr", "peer-list", "peers-legend", "owner", "end-room",
-   "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list", "extend-form"]
+  ["expires", "member-count", "copy-link", "link-qr", "room-link", "join", "join-form", "join-error", "config", "peer-count",
+   "stale", "download", "copy", "config-qr", "leave", "config-text", "peer-list", "peers-legend", "owner", "end-room",
+   "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list", "extend-form",
+   "overlay", "overlay-close", "overlay-qr", "overlay-caption", "tab-terminal-help", "key-field"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
+
+  // -- the QR overlay ----------------------------------------------------------------------------
+  function showQr(text, caption) {
+    try {
+      var qr = qrcode(0, "M");
+      qr.addData(text);
+      qr.make();
+      el["overlay-qr"].innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
+    } catch (e) {
+      el["overlay-qr"].textContent = "too large for a QR code";
+    }
+    el["overlay-caption"].textContent = caption;
+    el.overlay.hidden = false;
+  }
+  function hideQr() { el.overlay.hidden = true; }
+  el["overlay-close"].addEventListener("click", function (event) { event.preventDefault(); hideQr(); });
+  el.overlay.addEventListener("click", function (event) { if (event.target === el.overlay) hideQr(); });
+  document.addEventListener("keydown", function (event) { if (event.key === "Escape") hideQr(); });
+
+  // -- the two ways to bring a key: made here, or made in a terminal and pasted ----------------------
+  var tab = "browser";
+  function setTab(name) {
+    tab = name;
+    document.querySelectorAll(".tabs a").forEach(function (a) { a.classList.toggle("active", a.dataset.tab === name); });
+    el["tab-terminal-help"].hidden = name !== "terminal";
+    el["key-field"].hidden = name !== "terminal";
+    el["join-form"].public_key.required = name === "terminal";
+  }
+  document.querySelectorAll(".tabs a").forEach(function (a) {
+    a.addEventListener("click", function (event) { event.preventDefault(); setTab(a.dataset.tab); });
+  });
 
   function authHeaders(token) {
     return token ? { Authorization: "Bearer " + token } : {};
@@ -93,15 +125,6 @@
     el["peer-count"].textContent = "(covers " + me.peers.length + " peer" + (me.peers.length === 1 ? "" : "s") + ")" +
       (memory.privateKey ? "" : " · replace " + PLACEHOLDER + " with your private key");
     el.stale.hidden = !(memory.downloadedHash && memory.downloadedHash !== me.peers_hash);
-    try {
-      var qr = qrcode(0, "M");
-      qr.addData(configText);
-      qr.make();
-      // pixel-sized, not scalable: a 100%-wide SVG collapses inside the inline-block container
-      el.qr.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2 });
-    } catch (e) {
-      el.qr.textContent = "config too large for a QR code; use download";
-    }
     el["peer-list"].innerHTML = "";
     me.peers.forEach(function (p) {
       var li = document.createElement("li");
@@ -204,16 +227,8 @@
     markDownloaded();
   }
 
-  function renderRoomLinkQr() {
-    try {
-      var link = location.origin + location.pathname;
-      var qr = qrcode(0, "M");
-      qr.addData(link);
-      qr.make();
-      el["room-qr"].innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
-    } catch (e) {
-      el["room-qr"].textContent = location.href;
-    }
+  function roomLink() {
+    return el["room-link"].textContent.trim() || (location.origin + location.pathname);
   }
 
   var joinedView = false;
@@ -355,7 +370,7 @@
   el["join-form"].addEventListener("submit", function (event) {
     event.preventDefault();
     var form = new FormData(el["join-form"]);
-    join(String(form.get("name") || "").trim(), String(form.get("public_key") || "").trim());
+    join(String(form.get("name") || "").trim(), tab === "terminal" ? String(form.get("public_key") || "").trim() : "");
   });
   el.download.addEventListener("click", function (event) {
     event.preventDefault();
@@ -369,10 +384,20 @@
   });
   el["copy-link"].addEventListener("click", function (event) {
     event.preventDefault();
-    navigator.clipboard.writeText(location.href).then(function () {
+    navigator.clipboard.writeText(roomLink()).then(function () {
       el["copy-link"].textContent = "[copied]";
       setTimeout(function () { el["copy-link"].textContent = "[copy link]"; }, 1500);
     }, function () {});
+  });
+  el["link-qr"].addEventListener("click", function (event) {
+    event.preventDefault();
+    showQr(roomLink(), "scan to open this room on another device");
+  });
+  el["config-qr"].addEventListener("click", function (event) {
+    event.preventDefault();
+    if (!configText) return;
+    showQr(configText, "scan with the WireGuard app: + → Scan from QR code");
+    markDownloaded();
   });
   el.leave.addEventListener("click", function (event) { event.preventDefault(); leave(); });
   el["cancel-join"].addEventListener("click", function (event) { event.preventDefault(); leave(); });
@@ -407,7 +432,7 @@
   // -- start -----------------------------------------------------------------------------------
   if (isAdmin()) el.owner.hidden = false;
   if (memory && memory.memberToken) { el.join.hidden = true; }
-  renderRoomLinkQr();
+  setTab("browser");
   tick();
   var clockTimer = setInterval(tick, 1000);
   refresh();

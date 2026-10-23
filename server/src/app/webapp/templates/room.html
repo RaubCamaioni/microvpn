@@ -7,23 +7,38 @@
 {% block content %}
 <section id="room-header">
   <h1>{{ room.name or 'room ' ~ room.id[:8] }}</h1>
-  <p><span id="expires">expires in …</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members
-     · <a href="#" id="copy-link">[copy link]</a></p>
-  <div class="share">
-    <div id="room-qr" class="qr"></div>
-    <p class="dim">scan to open this room on another device, then join from there.</p>
-  </div>
+  <p class="link"><code id="room-link">{{ settings.PUBLIC_URL }}/r/{{ room.id }}</code>
+     <a href="#" id="copy-link">[copy link]</a> <a href="#" id="link-qr">[QR]</a></p>
+  <p><span id="expires">expires in …</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members</p>
 </section>
 
+{# the QR overlay: the room link, or the config for the WireGuard app; [x], Escape or a click outside closes it #}
+<div id="overlay" hidden>
+  <div class="modal">
+    <a href="#" id="overlay-close">[x]</a>
+    <div id="overlay-qr" class="qr"></div>
+    <p id="overlay-caption" class="dim"></p>
+  </div>
+</div>
+
 <section id="join">
+  <nav class="tabs">
+    <a href="#" data-tab="browser" class="active">[key in browser]</a>
+    <a href="#" data-tab="terminal">[key in terminal]</a>
+  </nav>
+  <div id="tab-terminal-help" hidden>
+    <p>Make the key where it will be used, then join with its public half:</p>
+    <pre>wg genkey | tee private.key | wg pubkey</pre>
+    <p class="dim">the config you get back keeps <code>PrivateKey = __PRIVATE_KEY__</code> for you to replace with the
+       contents of private.key.</p>
+  </div>
   <form id="join-form" autocomplete="off">
     <label>this device's name <input name="name" maxlength="32" required placeholder="rob-laptop"></label>
-    <label>public key <input name="public_key" maxlength="44" size="46" placeholder="optional: your own key, see below"></label>
+    <label id="key-field" hidden>public key <input name="public_key" maxlength="44" size="46" placeholder="paste the public key"></label>
     <button type="submit">[join]</button>
   </form>
   <p id="join-error" class="error" hidden></p>
-  <p class="dim">leave the public key empty and this browser makes the key for you; it never leaves this device.
-     The room's admin (whoever created it) sees your alias, your IP address and its approximate location before
+  <p class="dim">the room's admin (whoever created it) sees your alias, your IP address and its approximate location before
      accepting you.</p>
 </section>
 
@@ -44,32 +59,10 @@
 <section id="config" hidden>
   <h2>your config <span id="peer-count" class="dim"></span></h2>
   <p id="stale" class="stale" hidden>members changed since your last download or copy: import the config again to reach them.</p>
-  <p class="actions"><a href="#" id="download">[download]</a> <a href="#" id="copy">[copy]</a>
+  <p class="actions"><a href="#" id="download">[download]</a> <a href="#" id="copy">[copy]</a> <a href="#" id="config-qr">[QR]</a>
      <a href="#" id="add-apple" hidden>[add to WireGuard]</a> <a href="#" id="leave">[leave]</a></p>
   <p id="platform-hint" class="dim"></p>
   <pre id="config-text"></pre>
-  <div id="qr" class="qr"></div>
-  <p class="dim">scan with the WireGuard app on Android or iOS; on desktop import the downloaded file.</p>
-</section>
-
-<section id="steps">
-  <h2>with the WireGuard app</h2>
-  <ol>
-    <li>Install WireGuard from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.</li>
-    <li>Join above with a name for this device and wait for the admin to accept it (the admin's own browser is
-      accepted at once), then get the config into the app:
-      <span class="dim">Windows, macOS, Linux:</span> [download], then in the app <em>Add Tunnel → Import tunnel(s) from file</em>;
-      <span class="dim">Android, iOS:</span> in the app <em>+ → Scan from QR code</em> and point it at the code above;
-      <span class="dim">iPhone, iPad, Mac:</span> [add to WireGuard] saves a profile that installs through Settings.</li>
-    <li>Activate the tunnel. Members reach each other on their 10.x.y.z addresses.</li>
-    <li>When someone joins later, import the config again: it only lists the members present when it was made.</li>
-  </ol>
-  <h2>your own key</h2>
-  <p>To keep the private key on a machine without a browser, make the key there and join with its public half:</p>
-  <pre>wg genkey | tee private.key | wg pubkey</pre>
-  <p class="dim">paste the printed public key into the join form; the config then shows <code>PrivateKey = __PRIVATE_KEY__</code>
-     for you to replace with the contents of private.key. WireGuard for Windows does the same with
-     <em>Add empty tunnel</em>: copy its public key here, then paste the rest of the config into that tunnel.</p>
 </section>
 
 <section id="peers">
@@ -90,6 +83,18 @@
     <a href="#" id="end-room">[end room]</a>
   </form>
 </section>
+
+<details id="install">
+  <summary>[install WireGuard]</summary>
+  <ol>
+    <li>Get the app from <a href="https://www.wireguard.com/install/">wireguard.com/install</a>.</li>
+    <li><span class="dim">Windows, macOS, Linux:</span> [download] the config, then in the app <em>Add Tunnel → Import tunnel(s) from file</em>.</li>
+    <li><span class="dim">Android, iOS:</span> in the app <em>+ → Scan from QR code</em> and point it at [QR] beside your config.</li>
+    <li><span class="dim">iPhone, iPad, Mac:</span> [add to WireGuard] saves a profile that installs through Settings.</li>
+    <li>Activate the tunnel. Members reach each other on their 10.x.y.z addresses. When someone joins later,
+        import the config again: it only lists the members present when it was made.</li>
+  </ol>
+</details>
 
 <p class="dim notice">the server never sees a private key or a decrypted packet; it sees names, public keys,
 your public IP address and traffic timing.</p>

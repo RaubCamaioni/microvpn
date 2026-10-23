@@ -38,12 +38,18 @@ def test_room_page_and_gone_page(client):
     room = client.post("/rooms", json={"name": "game night", "lifetime_hours": 4}).json()
     page = client.get(f"/r/{room['id']}").text
     assert "game night" in page and f'data-room-id="{room["id"]}"' in page and 'data-max-members="8"' in page
-    assert "join.sh" not in page and "| sh" not in page  # the curl | sh path is gone
+    # the link at the top with copy and a QR button that opens the overlay
+    assert f'id="room-link"' in page and f"/r/{room['id']}" in page
+    assert 'id="copy-link"' in page and 'id="link-qr"' in page and 'id="overlay"' in page and 'id="overlay-close"' in page
+    # two ways to bring a key, as tabs; the terminal one carries the genkey command
+    assert 'data-tab="browser"' in page and 'data-tab="terminal"' in page
     assert 'name="public_key"' in page and "wg genkey | tee private.key | wg pubkey" in page
-    assert "Import tunnel(s) from file" in page and "Scan from QR code" in page
+    # the install steps are there but folded away
+    assert "<details" in page and "install WireGuard" in page and "Import tunnel(s) from file" in page
+    assert "join.sh" not in page and "| sh" not in page
     assert 'id="requests"' in page and "accept" in page.lower()
-    assert 'id="extend-form"' in page and 'name="lifetime"' in page
     assert "approximate location" in page and "db-ip.com" in page
+    assert 'id="extend-form"' in page and 'name="lifetime"' in page
     assert "vendor/nacl-fast.min.js" in page and "vendor/qrcode.js" in page
     gone = client.get("/r/" + "z" * 26)
     assert gone.status_code == 404 and "ended or never existed" in gone.text
@@ -68,11 +74,10 @@ def test_scripts_parse(name):
     subprocess.run(["node", "--check", str(STATIC / name)], check=True)
 
 
-def test_room_page_has_the_room_link_qr_and_the_apple_profile_action(client):
+def test_room_page_has_the_config_qr_button_and_the_apple_profile_action(client):
     room = client.post("/rooms", json={"name": "", "lifetime_hours": 1}).json()
     page = client.get(f"/r/{room['id']}").text
-    assert 'id="room-qr"' in page and 'id="add-apple"' in page and "static/mobileconfig.js" in page
-    assert "scan to open this room" in page
+    assert 'id="config-qr"' in page and 'id="add-apple"' in page and "static/mobileconfig.js" in page
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
