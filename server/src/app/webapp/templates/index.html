@@ -1,21 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>microvpn</h1>
-<p>A temporary WireGuard room: a private LAN between the devices of the people who have the link.
-Members reach each other; nothing is routed to the internet. The room ends on its own.</p>
+<p>A temporary WireGuard room: a private, end-to-end encrypted LAN between devices.
+Create a room and share its link with the members.</p>
 
 <h2>your rooms</h2>
 <ul id="my-rooms" class="rooms">
-  {% for r in my_rooms %}
-  <li>
-    <a href="{{ root_path }}/r/{{ r.id }}">{{ r.name or 'room ' ~ r.id[:8] }}</a>
-    <span class="dim">{% if r.is_admin %}admin{% else %}member{% endif %}{% if r.devices %} as {{ r.devices | join(', ') }}{% endif %}
-      · ends <span data-expires-at="{{ r.expires_at.isoformat() }}">{{ r.expires_at.strftime('%H:%M UTC') }}</span></span>
-    {% if r.is_admin %}<a href="#" data-delete="{{ r.id }}">[delete]</a>{% endif %}
-  </li>
-  {% else %}
-  <li class="dim">no rooms yet</li>
-  {% endfor %}
   <li id="new-room">
     <form id="create" autocomplete="off">
       <span class="dim">new room</span>
@@ -29,6 +19,17 @@ Members reach each other; nothing is routed to the internet. The room ends on it
     </form>
     <p id="error" class="error" hidden></p>
   </li>
+  {% for r in my_rooms %}
+  <li>
+    <a href="{{ root_path }}/r/{{ r.id }}">{{ r.name or 'room ' ~ r.id[:8] }}</a>
+    <span class="dim">{% if r.is_admin %}admin{% else %}member{% endif %}{% if r.devices %} as {{ r.devices | join(', ') }}{% endif %}
+      · ends <span data-expires-at="{{ r.expires_at.isoformat() }}">{{ r.expires_at.strftime('%H:%M UTC') }}</span></span>
+    {% if r.is_admin %}<a href="#" data-extend="{{ r.id }}" title="start the room's {{ r.lifetime_hours }}-hour lifetime again from now">[extend]</a>
+    <a href="#" data-delete="{{ r.id }}">[delete]</a>{% endif %}
+  </li>
+  {% else %}
+  <li class="dim">no rooms yet</li>
+  {% endfor %}
 </ul>
 {% endblock %}
 {% block scripts %}<script src="{{ root_path }}/static/index.js?v={{ static_version }}"></script>{% endblock %}

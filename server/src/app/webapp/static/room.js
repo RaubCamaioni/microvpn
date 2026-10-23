@@ -15,7 +15,7 @@
   var el = {};
   ["expires", "member-count", "copy-link", "join", "join-form", "join-error", "config", "peer-count", "stale",
    "download", "copy", "leave", "config-text", "qr", "room-qr", "peer-list", "peers-legend", "owner", "end-room",
-   "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list"]
+   "add-apple", "platform-hint", "pending", "cancel-join", "requests", "request-list", "extend-form"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
 
   function authHeaders(token) {
@@ -378,14 +378,31 @@
   el["cancel-join"].addEventListener("click", function (event) { event.preventDefault(); leave(); });
   el["end-room"].addEventListener("click", function (event) { event.preventDefault(); endRoom(); });
 
-  // -- countdown -------------------------------------------------------------------------------
+  // -- countdown and extending -----------------------------------------------------------------
   var expiresAt = new Date(main.dataset.expiresAt);
   function tick() {
     var left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
     if (left === 0) { el.expires.textContent = "expired"; return; }
     var h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
-    el.expires.textContent = "expires in " + (h ? h + "h " : "") + (h || m ? m + "m " : "") + (h ? "" : s + "s");
+    el.expires.textContent = "expires in " + (h ? h + "h " : "") + m + "m " + s + "s";
   }
+
+  async function extend(hours) {
+    var res = await fetch(api + "/extend", {
+      method: "POST",
+      headers: Object.assign({ "content-type": "application/json" }, authHeaders(ownerToken())),
+      body: JSON.stringify(hours ? { lifetime_hours: hours } : {}),
+    });
+    if (res.status === 404) return showGone();
+    if (res.ok) {
+      expiresAt = new Date((await res.json()).expires_at);
+      tick();
+    }
+  }
+  el["extend-form"].addEventListener("submit", function (event) {
+    event.preventDefault();
+    extend(Number(new FormData(el["extend-form"]).get("lifetime")));
+  });
 
   // -- start -----------------------------------------------------------------------------------
   if (isAdmin()) el.owner.hidden = false;

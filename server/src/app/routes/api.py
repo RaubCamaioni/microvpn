@@ -20,6 +20,10 @@ class JoinRoom(BaseModel):
     public_key: str
 
 
+class ExtendRoom(BaseModel):
+    lifetime_hours: int | None = None
+
+
 def rooms(request: Request) -> RoomService:
     return request.app.state.rooms
 
@@ -112,6 +116,12 @@ async def approve_member(room_id: str, member_id: int, request: Request):
 def remove_member(room_id: str, member_id: int, request: Request):
     rooms(request).remove_member(room_id, bearer_or_none(request), member_id, visitor_id=visitor(request))
     return Response(status_code=204)
+
+
+@router.post("/r/{room_id}/extend")
+def extend_room(room_id: str, body: ExtendRoom, request: Request):
+    expires_at = rooms(request).extend(room_id, bearer_or_none(request), body.lifetime_hours, visitor_id=visitor(request))
+    return {"expires_at": expires_at.isoformat()}
 
 
 @router.delete("/r/{room_id}", status_code=204)

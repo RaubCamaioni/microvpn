@@ -44,7 +44,8 @@ def test_startup_adds_columns_missing_from_an_older_database(tmp_path):
     with Session(engine) as s:
         m = s.exec(select(Member)).one()
         assert m.approved is False and m.joined_ip == "" and m.location == "" and m.visitor_id == ""
-        assert s.exec(select(Room)).one().visitor_id == ""
+        old = s.exec(select(Room)).one()
+        assert old.visitor_id == "" and old.lifetime_hours == 1
     create_db_and_tables(engine)  # idempotent
 
 

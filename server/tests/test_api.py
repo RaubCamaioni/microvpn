@@ -98,3 +98,15 @@ def test_admin_endpoint_shows_ip_and_location_to_the_owner_only(client):
     ]
     public = client.get(f"/r/{room['id']}/state").json()
     assert "joined_ip" not in public["members"][0] and "location" not in public["members"][0]
+
+
+def test_extend_endpoint(client):
+    room = create(client, lifetime_hours=4).json()
+    owner = {"Authorization": "Bearer " + room["owner_token"]}
+    assert client.post(f"/r/{room['id']}/extend", json={}).status_code == 401
+    assert client.post(f"/r/{room['id']}/extend", json={"lifetime_hours": 3}, headers=owner).status_code == 400
+    r = client.post(f"/r/{room['id']}/extend", json={}, headers=owner)
+    assert r.status_code == 200 and r.json()["expires_at"] >= room["expires_at"]
+    r2 = client.post(f"/r/{room['id']}/extend", json={"lifetime_hours": 1}, headers=owner)
+    assert r2.status_code == 200 and r2.json()["expires_at"] < r.json()["expires_at"]
+    assert client.get(f"/r/{room['id']}/state").json()["expires_at"] == r2.json()["expires_at"]
