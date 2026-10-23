@@ -18,19 +18,20 @@ def unprefixed(page):
     return [u for u in urls if not u.startswith(PREFIX + "/") and u != PREFIX]
 
 
-def test_index_is_just_the_title_and_the_rooms_list(client):
+def test_index_is_just_the_title_the_create_form_and_the_rooms_tree(client):
     page = client.get("/").text
-    assert "<h1>microvpn</h1>" in page and "your rooms" in page  # the list is always there
-    assert "end-to-end encrypted" in page.lower() and "share" in page.lower()
+    assert "<h1>microvpn</h1>" in page and "end-to-end encrypted" in page.lower() and "share" in page.lower()
     assert "ends on its own" not in page and "how it works" not in page and "limits" not in page
-    assert 'name="lifetime"' in page and "<option" in page and "1 hour" in page and "24 hours" in page
-    assert 'id="new-room"' in page and "[create]" in page
-    assert page.index('id="new-room"') < page.index("no rooms yet")  # the create row comes first
-    room = client.post("/rooms", json={"name": "game night", "lifetime_hours": 1}).json()
+    assert 'id="new-room"' in page and 'name="lifetime"' in page and "1 hour" in page and "24 hours" in page
+    assert page.index('id="new-room"') < page.index("your rooms/")  # the form above the tree
+    assert "└── no rooms yet" in page
+    a = client.post("/rooms", json={"name": "game night", "lifetime_hours": 1}).json()
+    b = client.post("/rooms", json={"name": "", "lifetime_hours": 4}).json()
     page = client.get("/").text
-    assert "game night" in page and "no rooms yet" not in page and f'data-delete="{room["id"]}"' in page
-    assert page.index('id="new-room"') < page.index("game night")
-    assert f'data-extend="{room["id"]}"' in page
+    assert "no rooms yet" not in page
+    assert page.count("├── ") == 1 and page.count("└── ") == 1  # tree connectors: every branch but the last, then the last
+    assert "game night" in page and f"room {b['id'][:8]}" in page
+    assert f'data-delete="{a["id"]}"' in page and f'data-extend="{a["id"]}"' in page
 
 
 def test_room_page_and_gone_page(client):
