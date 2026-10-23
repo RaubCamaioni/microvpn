@@ -16,7 +16,6 @@
 
   var el = {};
   ["expires", "member-count", "copy-link", "link-qr", "room-link", "profile-form", "profile-error", "profile-list",
-   "config", "config-title", "peer-count", "stale", "download", "copy", "config-qr", "config-text", "add-apple",
    "platform-hint", "peer-list", "peers-legend", "end-room", "requests", "request-list", "extend-form", "admin-bar",
    "overlay", "overlay-close", "overlay-qr", "overlay-caption"]
     .forEach(function (id) { el[id] = document.getElementById(id); });
@@ -135,6 +134,7 @@
   // -- rendering -------------------------------------------------------------------------------
   function renderProfiles() {
     el["profile-list"].innerHTML = "";
+    el["platform-hint"].textContent = memory.profiles.length ? HINTS[apple || "other"] : "";
     if (!memory.profiles.length) {
       var none = document.createElement("div");
       none.className = "branch dim";
@@ -147,33 +147,25 @@
       var row = document.createElement("div");
       row.className = "branch" + (i === memory.selected ? " selected" : "");
       row.appendChild(span(i === memory.profiles.length - 1 ? "└── " : "├── ", "dim connector"));
-      row.appendChild(link(p.name, function () { memory.selected = i; save(); render(); }, "show this profile's config"));
-      var status = !view ? "…" : view.approved ? p.address + (p.privateKey ? "" : " · key kept elsewhere") : "waiting for the admin";
-      row.appendChild(span("· " + status, "dim"));
-      if (view && view.approved) {
-        row.appendChild(link("[QR]", function () { memory.selected = i; save(); render(); showProfileQr(p); }));
+      row.appendChild(link(p.name, function () { memory.selected = i; save(); render(); }, "show this profile's peers in the members list"));
+      if (!view) {
+        row.appendChild(span("· …", "dim"));
+      } else if (!view.approved) {
+        row.appendChild(span("· waiting for the admin", "dim"));
+      } else {
+        var peers = view.peers.length + " peer" + (view.peers.length === 1 ? "" : "s");
+        row.appendChild(span("· " + p.address + " · " + peers + (p.privateKey ? "" : " · key kept elsewhere"), "dim"));
+        if (p.downloadedHash && p.downloadedHash !== view.peers_hash) {
+          row.appendChild(span("(members changed: import again)", "stale"));
+        }
+        row.appendChild(link("[download]", function () { downloadProfile(p); }, "the .conf file for the WireGuard app"));
+        row.appendChild(link("[copy]", function () { copyProfile(p); }, "the config text to the clipboard"));
+        row.appendChild(link("[QR]", function () { memory.selected = i; save(); render(); showProfileQr(p); }, "scan with the phone app"));
+        if (apple && p.privateKey) row.appendChild(link("[add to WireGuard]", function () { addToWireGuard(p); }));
       }
       row.appendChild(link("[remove]", function () { removeProfile(i); }, "leave the room with this profile"));
       el["profile-list"].appendChild(row);
     });
-  }
-
-  function renderSelected() {
-    var p = selected();
-    var view = p && views[p.memberToken];
-    if (!p || !view || !view.approved) {
-      el.config.hidden = true;
-      return;
-    }
-    var text = configTextOf(p);
-    el["config-title"].textContent = p.name;
-    el["config-text"].textContent = text;
-    el["peer-count"].textContent = "(covers " + view.peers.length + " peer" + (view.peers.length === 1 ? "" : "s") + ")" +
-      (p.privateKey ? "" : " · replace " + PLACEHOLDER + " with the private key");
-    el.stale.hidden = !(p.downloadedHash && p.downloadedHash !== view.peers_hash);
-    el["add-apple"].hidden = !apple || !p.privateKey;
-    el["platform-hint"].textContent = HINTS[apple || "other"];
-    el.config.hidden = false;
   }
 
   function renderMembers(state) {
@@ -229,7 +221,6 @@
   var lastState = null, lastAdmin = null;
   function render() {
     renderProfiles();
-    renderSelected();
     if (lastState) renderMembers(lastState);
     if (lastAdmin) renderAdmin(lastAdmin);
   }
@@ -343,7 +334,8 @@
   function markDownloaded(p) {
     var view = views[p.memberToken];
     if (view) { p.downloadedHash = view.peers_hash; save(); }
-    el.stale.hidden = true;
+    lastSignature = null;
+    renderProfiles();
   }
   function saveBlob(text, filename, type) {
     var blob = new Blob([text], { type: type });
@@ -356,6 +348,17 @@
   }
   function fileTag(p) {
     return "mv" + shortId + "-" + p.name.replace(/[^A-Za-z0-9_=+.-]/g, "-").slice(0, 12);
+  }
+  function downloadProfile(p) {
+    var text = configTextOf(p);
+    if (!text) return;
+    saveBlob(text, fileTag(p) + ".conf", "application/octet-stream");
+    markDownloaded(p);
+  }
+  function copyProfile(p) {
+    var text = configTextOf(p);
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(function () { markDownloaded(p); }, function () {});
   }
   function showProfileQr(p) {
     var text = configTextOf(p);
@@ -386,31 +389,6 @@
     event.preventDefault();
     var form = new FormData(el["profile-form"]);
     createProfile(String(form.get("name") || "").trim(), String(form.get("public_key") || "").trim());
-  });
-  el.download.addEventListener("click", function (event) {
-    event.preventDefault();
-    var p = selected();
-    var text = p && configTextOf(p);
-    if (!text) return;
-    saveBlob(text, fileTag(p) + ".conf", "application/octet-stream");
-    markDownloaded(p);
-  });
-  el.copy.addEventListener("click", function (event) {
-    event.preventDefault();
-    var p = selected();
-    var text = p && configTextOf(p);
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(function () { markDownloaded(p); }, function () {});
-  });
-  el["config-qr"].addEventListener("click", function (event) {
-    event.preventDefault();
-    var p = selected();
-    if (p) showProfileQr(p);
-  });
-  el["add-apple"].addEventListener("click", function (event) {
-    event.preventDefault();
-    var p = selected();
-    if (p) addToWireGuard(p);
   });
   el["copy-link"].addEventListener("click", function (event) {
     event.preventDefault();

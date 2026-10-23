@@ -78,10 +78,11 @@ def test_scripts_parse(name):
     subprocess.run(["node", "--check", str(STATIC / name)], check=True)
 
 
-def test_room_page_has_the_config_qr_button_and_the_apple_profile_action(client):
+def test_room_page_never_prints_a_config_and_keeps_the_apple_builder(client):
     room = client.post("/rooms", json={"name": "", "lifetime_hours": 1}).json()
     page = client.get(f"/r/{room['id']}").text
-    assert 'id="config-qr"' in page and 'id="add-apple"' in page and "static/mobileconfig.js" in page
+    assert 'id="config-text"' not in page and 'id="config"' not in page  # actions live on the profile rows
+    assert 'id="profile-list"' in page and "static/mobileconfig.js" in page and 'id="platform-hint"' in page
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
