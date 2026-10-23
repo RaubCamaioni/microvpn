@@ -5,7 +5,9 @@ from dataclasses import asdict
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
+from app import keys
 from app.rooms import RoomService, Unauthorized
+from app.templating import TEMPLATES
 
 router = APIRouter()
 
@@ -65,6 +67,14 @@ def room_state(room_id: str, request: Request):
         "max_members": view.max_members,
         "members": [asdict(m) for m in view.members],
     }
+
+
+@router.get("/r/{room_id}/join.sh")
+def join_script(room_id: str, request: Request):
+    rooms(request).room_view(room_id)  # 404 when the room is gone
+    public_url = request.app.state.settings.PUBLIC_URL.rstrip("/")
+    text = TEMPLATES.get_template("join.sh").render(base=f"{public_url}/r/{room_id}", tag=f"mv{keys.short_id(room_id)}")
+    return Response(text, media_type="text/x-shellscript; charset=utf-8")
 
 
 @router.post("/r/{room_id}/members", status_code=201)
