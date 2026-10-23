@@ -1,0 +1,20 @@
+{
+    "name": "microvpn",
+    "build": {
+        "context": "..",
+        "dockerfile": "../containers/Containerfile",
+        "target": "test"
+    },
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "/venv/bin/python"
+            },
+            "extensions": [
+                "ms-python.python"
+            ]
+        }
+    }
+}

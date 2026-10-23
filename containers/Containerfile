@@ -1,0 +1,39 @@
+# microvpn image. Three stages, all built from this file:
+#   base     python:3.12-slim with the runtime dependencies in /venv
+#   test     + dev dependencies, node (script syntax checks) and the sources; CMD runs pytest
+#   runtime  the shipped app: sources installed, non-root user, CMD runs the server
+# ./test.sh and ./build.sh (locally, podman in WSL) and .github/workflows/main.yml (docker) build these.
+
+FROM python:3.12-slim AS base
+ENV PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+COPY server/pyproject.toml /tmp/pyproject.toml
+# runtime dependencies first: this layer is reused until pyproject.toml changes
+RUN python -m venv /venv && /venv/bin/python -c "\
+import subprocess, sys, tomllib; \
+deps = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['dependencies']; \
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', *deps])"
+
+
+FROM base AS test
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/*
+RUN /venv/bin/python -c "\
+import subprocess, sys, tomllib; \
+deps = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']['dev']; \
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', *deps])"
+COPY server /src/server
+RUN /venv/bin/pip install --no-deps /src/server
+WORKDIR /src/server
+ENV PATH="/venv/bin:$PATH"
+CMD ["pytest"]
+
+
+FROM base AS runtime
+# the commit the image was built from, shown bottom-right on every page (CI passes GIT_SHA)
+ARG GIT_SHA=
+RUN echo "$GIT_SHA" > /etc/microvpn-commit
+RUN useradd -u 1000 -m app && mkdir -p /data && chown app:app /data
+COPY server /tmp/server
+RUN /venv/bin/pip install --no-deps /tmp/server && rm -rf /tmp/server
+USER app
+EXPOSE 8080
+CMD ["/venv/bin/microvpn"]
