@@ -1,6 +1,8 @@
 """The FastAPI application factory. Tests build apps with their own settings and a relay double."""
 
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -13,6 +15,8 @@ from app.rooms import RoomError, RoomService
 from app.routes import api, pages
 from app.settings import Settings
 from app.templating import WEBAPP
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class NoStoreMiddleware:
@@ -40,10 +44,31 @@ def create_app(settings: Settings, relay=None) -> FastAPI:
     relay = relay if relay is not None else Relay(settings)
     rooms = RoomService(engine, settings, relay)
 
+    async def sweeper(app: FastAPI):
+        """Every SWEEP_SECONDS: end the rooms whose time is up. An error is logged, never fatal."""
+        while True:
+            await asyncio.sleep(settings.SWEEP_SECONDS)
+            try:
+                removed = await asyncio.to_thread(rooms.sweep)
+                if removed:
+                    logger.info("sweep: ended %d expired room(s)", removed)
+            except Exception:  # noqa: BLE001 - the sweeper must survive anything
+                logger.exception("sweep failed")
+            app.state.sweeps += 1
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         create_db_and_tables(engine)
-        yield
+        reopened = await rooms.restore()
+        logger.info("restore: %d relay port(s) re-bound", reopened)
+        app.state.sweeps = 0
+        task = asyncio.create_task(sweeper(app))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
