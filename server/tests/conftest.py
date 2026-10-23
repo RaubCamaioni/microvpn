@@ -28,11 +28,14 @@ class FakeRelay:
         self.closed: list[int] = []
         self.activity: dict[int, int] = {}
         self.fail_ports: set[int] = set()
+        self.keys: dict[int, tuple[str, str]] = {}
 
-    async def open(self, port: int, room_id: str) -> bool:
-        if port in self.fail_ports:
+    async def open(self, port: int, room_id: str, keys: tuple[str, str] | None = None) -> bool:
+        if port in self.fail_ports or port in self.opened:
             return False
         self.opened[port] = room_id
+        if keys is not None:
+            self.keys[port] = keys
         return True
 
     def close(self, port: int) -> None:

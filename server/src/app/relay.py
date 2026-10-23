@@ -7,6 +7,9 @@ has no WireGuard keys, so everything that passes is ciphertext it cannot read. S
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
 import time
 from dataclasses import dataclass
@@ -15,6 +18,9 @@ from typing import Callable
 from app.settings import Settings
 
 logger = logging.getLogger("uvicorn.error")
+
+# a pair's two public keys, base64 as in the configs
+PairKeys = tuple[str, str]
 
 HANDSHAKE_INITIATION = 1
 HANDSHAKE_RESPONSE = 2
@@ -40,6 +46,28 @@ def packet_kind(data: bytes) -> int | None:
     if exact is not None and len(data) != exact:
         return None
     return kind
+
+
+def _mac1_key(pubkey_b64: str) -> bytes:
+    return hashlib.blake2s(b"mac1----" + base64.b64decode(pubkey_b64), digest_size=32).digest()
+
+
+def mac1_valid(data: bytes, keys: PairKeys) -> bool:
+    """Whether a handshake message carries the mac1 a real WireGuard peer computes for one of the
+    pair's public keys: mac1 = keyed_blake2s(blake2s("mac1----" || receiver_pubkey), msg[:-32])[:16].
+    The relay cannot tell which member is the receiver, so either key is accepted. Only a client that
+    has a member's public key, which the room link gives, can produce it: junk never claims a slot."""
+    if packet_kind(data) not in (HANDSHAKE_INITIATION, HANDSHAKE_RESPONSE):
+        return False
+    body, mac1 = data[:-32], data[-32:-16]
+    for key in keys:
+        try:
+            expected = hashlib.blake2s(body, digest_size=16, key=_mac1_key(key)).digest()
+        except (ValueError, TypeError):
+            continue
+        if hmac.compare_digest(expected, mac1):
+            return True
+    return False
 
 
 class TokenBucket:
@@ -72,8 +100,16 @@ class Slot:
 class PairPort(asyncio.DatagramProtocol):
     """One relay port: two learned addresses, packets from one forwarded to the other."""
 
-    def __init__(self, room_id: str, room_bucket: TokenBucket, global_bucket: TokenBucket, clock: Callable[[], float]):
+    def __init__(
+        self,
+        room_id: str,
+        keys: PairKeys,
+        room_bucket: TokenBucket,
+        global_bucket: TokenBucket,
+        clock: Callable[[], float],
+    ):
         self.room_id = room_id
+        self.keys = keys
         self.room_bucket = room_bucket
         self.global_bucket = global_bucket
         self.clock = clock
@@ -91,15 +127,15 @@ class PairPort(asyncio.DatagramProtocol):
         sender = next((s for s in self.slots if s.addr == addr), None)
         if sender is not None:
             sender.last_seen = now
+        elif not mac1_valid(data, self.keys):
+            return  # an address that holds no slot claims one only with a handshake for this pair
         elif len(self.slots) < 2:
             sender = Slot(addr, now)
             self.slots.append(sender)
-        elif kind in (HANDSHAKE_INITIATION, HANDSHAKE_RESPONSE):
-            # a handshake from a new address: the client roamed; it takes over the stalest slot
+        else:
+            # a genuine handshake from a new address: the client roamed; it takes over the stalest slot
             sender = min(self.slots, key=lambda s: s.last_seen)
             sender.addr, sender.last_seen = addr, now
-        else:
-            return  # data from an address that holds no slot: dropped
         other = next((s for s in self.slots if s is not sender), None)
         if other is None or self.transport is None:
             return
@@ -120,6 +156,7 @@ class Relay:
         self._ports: dict[int, tuple[asyncio.DatagramTransport, PairPort]] = {}
         self._room_buckets: dict[str, TokenBucket] = {}
         self._global_bucket = self._bucket(settings.RELAY_TOTAL_MBPS)
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _bucket(self, mbps: float) -> TokenBucket:
         rate = mbps * 1e6 / 8  # bytes per second, with a burst of one second
@@ -130,14 +167,16 @@ class Relay:
             self._room_buckets[room_id] = self._bucket(self.settings.ROOM_MBPS)
         return self._room_buckets[room_id]
 
-    async def open(self, port: int, room_id: str) -> bool:
-        """Bind the port for a pair of `room_id`; False (and a warning) when the bind fails."""
+    async def open(self, port: int, room_id: str, keys: PairKeys) -> bool:
+        """Bind the port for the pair of `room_id` whose members hold `keys`. False when the port is
+        already in use, by this relay or anything else (with a warning for the latter)."""
         if port in self._ports:
-            return True
+            return False
         loop = asyncio.get_running_loop()
+        self._loop = loop
         try:
             transport, protocol = await loop.create_datagram_endpoint(
-                lambda: PairPort(room_id, self._room_bucket(room_id), self._global_bucket, self.clock),
+                lambda: PairPort(room_id, keys, self._room_bucket(room_id), self._global_bucket, self.clock),
                 local_addr=(self.settings.RELAY_BIND, port),
             )
         except OSError as e:
@@ -147,9 +186,16 @@ class Relay:
         return True
 
     def close(self, port: int) -> None:
+        """Forget the port now and close its transport on the event loop: callers include the sweeper
+        and sync endpoints, which run in worker threads, and transports are not thread-safe."""
         entry = self._ports.pop(port, None)
-        if entry is not None:
-            entry[0].close()
+        if entry is None:
+            return
+        transport = entry[0]
+        if self._loop is not None and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(transport.close)
+        else:
+            transport.close()
 
     def close_room(self, room_id: str) -> None:
         for port in [p for p, (_, proto) in self._ports.items() if proto.room_id == room_id]:

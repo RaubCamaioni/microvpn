@@ -6,7 +6,7 @@ rejects naive values); use utcnow().
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, UniqueConstraint
 from sqlmodel import Field, SQLModel, create_engine
 
 
@@ -24,6 +24,9 @@ class Room(SQLModel, table=True):
 
 
 class Member(SQLModel, table=True):
+    # the service checks both before inserting; the constraints are the backstop
+    __table_args__ = (UniqueConstraint("room_id", "public_key"), UniqueConstraint("room_id", "address"))
+
     id: int | None = Field(default=None, primary_key=True)
     room_id: str = Field(foreign_key="room.id", index=True)
     name: str

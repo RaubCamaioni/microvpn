@@ -9,7 +9,7 @@ description = "Temporary WireGuard rooms: end-to-end encrypted virtual LANs thro
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.115",
-    "sqlmodel>=0.0.24",
+    "sqlmodel>=0.0.48",  # timezone-aware datetimes (app.models.utcnow) need 0.0.48+
     "uvloop>=0.21; sys_platform != 'win32'",
 ]
 
