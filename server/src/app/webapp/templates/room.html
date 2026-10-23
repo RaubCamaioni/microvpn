@@ -2,7 +2,8 @@
 {% block title %}microvpn: {{ room.name or room.id[:8] }}{% endblock %}
 {% block head %}<meta name="robots" content="noindex">{% endblock %}
 {% block main_attrs %}id="room" data-room-id="{{ room.id }}" data-root-path="{{ root_path }}" data-short="{{ room.id[:8] }}"
-      data-expires-at="{{ room.expires_at.isoformat() }}" data-max-members="{{ room.max_members }}"{% endblock %}
+      data-expires-at="{{ room.expires_at.isoformat() }}" data-max-members="{{ room.max_members }}"
+      data-admin="{{ '1' if is_admin else '0' }}"{% endblock %}
 {% block content %}
 <section id="room-header">
   <h1>{{ room.name or 'room ' ~ room.id[:8] }}</h1>
