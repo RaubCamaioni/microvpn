@@ -18,10 +18,17 @@ def unprefixed(page):
     return [u for u in urls if not u.startswith(PREFIX + "/") and u != PREFIX]
 
 
-def test_index_renders_the_form_and_the_notice(client):
+def test_index_is_just_the_title_and_the_rooms_list(client):
     page = client.get("/").text
+    assert "<h1>microvpn</h1>" in page and "your rooms" in page  # the list is always there
     assert 'name="lifetime"' in page and "<option" in page and "1 hour" in page and "24 hours" in page
-    assert "never" in page and "private key" in page.lower() and "8 members" in page
+    assert 'id="new-room"' in page and "[create]" in page  # the new-room row sits inside the list
+    for gone in ("how it works", "what the server sees", "limits", "wg genkey"):
+        assert gone not in page
+    assert "no rooms yet" in page
+    room = client.post("/rooms", json={"name": "game night", "lifetime_hours": 1}).json()
+    page = client.get("/").text
+    assert "game night" in page and "no rooms yet" not in page and f'data-delete="{room["id"]}"' in page
 
 
 def test_room_page_and_gone_page(client):
