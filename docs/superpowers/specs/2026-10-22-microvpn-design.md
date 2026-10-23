@@ -303,3 +303,13 @@ captcha; rooms that outlive their timer; any chat or presence beyond the relay m
 - **Shared host.** The relay competes for 2 vCPUs with two sandboxed apps; the global cap keeps
   it from starving them, and `ROOM_MBPS` and `RELAY_TOTAL_MBPS` can be lowered live.
 - **Metadata.** The server learns who talks to whom and when. This is stated on the page.
+
+## Changes after the first release
+
+- 2026-10-23: the `join.sh` shell path is removed. Headless machines join by making a key locally
+  (`wg genkey | tee private.key | wg pubkey`) and pasting the public key into the join form; the
+  config then keeps `__PRIVATE_KEY__` for the member to fill in. The room page shows a QR code of
+  the room link for inviting another device, and on iOS and macOS an `[add to WireGuard]` action
+  that saves an Apple configuration profile built in the browser (the WireGuard project's
+  documented `.mobileconfig` format), since the official apps have no browser hand-off on Windows
+  or Android (verified against the installer and manifest sources).
