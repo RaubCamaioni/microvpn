@@ -4,7 +4,6 @@
 <p>A temporary WireGuard room: a private LAN between the devices of the people who have the link.
 Members reach each other; nothing is routed to the internet. The room ends on its own.</p>
 
-{% if my_rooms %}
 <h2>your rooms</h2>
 <ul id="my-rooms" class="rooms">
   {% for r in my_rooms %}
@@ -14,41 +13,22 @@ Members reach each other; nothing is routed to the internet. The room ends on it
       · ends <span data-expires-at="{{ r.expires_at.isoformat() }}">{{ r.expires_at.strftime('%H:%M UTC') }}</span></span>
     {% if r.is_admin %}<a href="#" data-delete="{{ r.id }}">[delete]</a>{% endif %}
   </li>
+  {% else %}
+  <li class="dim">no rooms yet</li>
   {% endfor %}
+  <li id="new-room">
+    <form id="create" autocomplete="off">
+      <span class="dim">new room</span>
+      <label>name <input name="name" maxlength="40" placeholder="optional"></label>
+      <label>lifetime
+        <select name="lifetime">
+          {% for h in settings.ROOM_LIFETIMES %}<option value="{{ h }}">{{ h }} hour{{ '' if h == 1 else 's' }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">[create]</button>
+    </form>
+    <p id="error" class="error" hidden></p>
+  </li>
 </ul>
-<p class="dim">rooms this browser created or joined, remembered by a cookie that only works from the network it was
-set on. Clearing cookies or changing networks empties this list; the rooms themselves live on.</p>
-{% endif %}
-
-<h2>new room</h2>
-<form id="create" autocomplete="off">
-  <label>name <input name="name" maxlength="40" placeholder="optional"></label>
-  <label>lifetime
-    <select name="lifetime">
-      {% for h in settings.ROOM_LIFETIMES %}<option value="{{ h }}">{{ h }} hour{{ '' if h == 1 else 's' }}</option>{% endfor %}
-    </select>
-  </label>
-  <button type="submit">[create room]</button>
-  <p id="error" class="error" hidden></p>
-</form>
-
-<h2>how it works</h2>
-<ol>
-  <li>Create a room and share its link. Whoever creates it is the admin: every other device that asks to join
-    waits until the admin's browser accepts it, seeing its alias, IP address and approximate location.</li>
-  <li>Each device makes its own WireGuard key, in the browser or with <code>wg genkey</code>, and sends only the public key.</li>
-  <li>Download the config or scan the QR code with the WireGuard app. Members get 10.x.y.z addresses and talk to each other through the relay.</li>
-  <li>When the time is up the room ends and nothing about it is kept.</li>
-</ol>
-
-<h2>what the server sees</h2>
-<p>The server never holds a private key and is never a WireGuard peer. It forwards encrypted UDP between
-members and cannot read it. It does see room and device names, public keys, members' public IP addresses,
-and the size and timing of packets.</p>
-
-<h2>limits</h2>
-<p>{{ settings.ROOM_MAX_MEMBERS }} members per room; lifetimes of
-{% for h in settings.ROOM_LIFETIMES %}{{ h }}{{ ', ' if not loop.last else '' }}{% endfor %} hours;
-{{ settings.ROOM_MBPS | int }} Mbit/s per room through the relay; {{ settings.ROOM_CREATE_PER_IP_PER_HOUR }} rooms per address per hour.</p>
 {% endblock %}
 {% block scripts %}<script src="{{ root_path }}/static/index.js?v={{ static_version }}"></script>{% endblock %}
