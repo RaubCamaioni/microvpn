@@ -3,21 +3,64 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from http.cookies import SimpleCookie
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
 
 from app.geo import Geo
 from app.models import create_db_and_tables, make_engine
 from app.relay import Relay
-from app.rooms import RoomError, RoomService
+from app.rooms import VISITOR_COOKIE_DAYS, RoomError, RoomService
 from app.routes import api, pages
 from app.settings import Settings
 from app.templating import WEBAPP
 
 logger = logging.getLogger("uvicorn.error")
+
+
+VISITOR_COOKIE = "microvpn_visitor"
+
+
+class VisitorMiddleware:
+    """The browser identity. Every page and API request gets a visitor id in `request.state`: the one
+    behind the `microvpn_visitor` cookie when that cookie is known and was issued to the request's
+    address, else a fresh one whose cookie is set on the response. Static files and healthz are skipped."""
+
+    def __init__(self, app, rooms: RoomService, settings: Settings):
+        self.app = app
+        self.rooms = rooms
+        self.settings = settings
+        secure = settings.PUBLIC_URL.lower().startswith("https://")
+        self.cookie_attrs = (
+            f"; Path={settings.ROOT_PATH or '/'}; Max-Age={VISITOR_COOKIE_DAYS * 86400}; HttpOnly; SameSite=Lax"
+            + ("; Secure" if secure else "")
+        )
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if scope["type"] != "http" or path.startswith("/static/") or path == "/healthz":
+            return await self.app(scope, receive, send)
+        headers = Headers(scope=scope)
+        cookie = SimpleCookie()
+        try:
+            cookie.load(headers.get("cookie", ""))
+        except Exception:  # noqa: BLE001 - a malformed cookie header is no cookie
+            cookie = SimpleCookie()
+        token = cookie[VISITOR_COOKIE].value if VISITOR_COOKIE in cookie else None
+        client_ip = headers.get("x-real-ip") or (scope.get("client") or ("unknown",))[0]
+        visitor_id, new_token = await asyncio.to_thread(self.rooms.visitor, token, client_ip)
+        scope.setdefault("state", {})["visitor_id"] = visitor_id
+
+        async def send_with_cookie(message):
+            if message["type"] == "http.response.start" and new_token is not None:
+                message.setdefault("headers", [])
+                MutableHeaders(raw=message["headers"]).append("set-cookie", f"{VISITOR_COOKIE}={new_token}{self.cookie_attrs}")
+            await send(message)
+
+        await self.app(scope, receive, send_with_cookie)
 
 
 class NoStoreMiddleware:
@@ -83,6 +126,7 @@ def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status)
 
     app.add_middleware(NoStoreMiddleware)
+    app.add_middleware(VisitorMiddleware, rooms=rooms, settings=settings)
     app.mount("/static", StaticFiles(directory=WEBAPP / "static"), name="static")
     app.include_router(api.router)
     app.include_router(pages.router)

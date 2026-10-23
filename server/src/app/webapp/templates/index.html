@@ -4,6 +4,23 @@
 <p>A temporary WireGuard room: a private LAN between the devices of the people who have the link.
 Members reach each other; nothing is routed to the internet. The room ends on its own.</p>
 
+{% if my_rooms %}
+<h2>your rooms</h2>
+<ul id="my-rooms" class="rooms">
+  {% for r in my_rooms %}
+  <li>
+    <a href="{{ root_path }}/r/{{ r.id }}">{{ r.name or 'room ' ~ r.id[:8] }}</a>
+    <span class="dim">{% if r.is_admin %}admin{% else %}member{% endif %}{% if r.devices %} as {{ r.devices | join(', ') }}{% endif %}
+      · ends <span data-expires-at="{{ r.expires_at.isoformat() }}">{{ r.expires_at.strftime('%H:%M UTC') }}</span></span>
+    {% if r.is_admin %}<a href="#" data-delete="{{ r.id }}">[delete]</a>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+<p class="dim">rooms this browser created or joined, remembered by a cookie that only works from the network it was
+set on. Clearing cookies or changing networks empties this list; the rooms themselves live on.</p>
+{% endif %}
+
+<h2>new room</h2>
 <form id="create" autocomplete="off">
   <label>name <input name="name" maxlength="40" placeholder="optional"></label>
   <label>lifetime

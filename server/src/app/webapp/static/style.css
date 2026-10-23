@@ -55,6 +55,8 @@ button:hover, button:focus-visible { background: var(--paper); color: var(--ink)
 #peer-list li { display: grid; grid-template-columns: 2ch 1fr; column-gap: 1ch; }
 #peer-list li .addr { color: var(--dim); }
 .notice { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 0.5rem; font-size: 0.9rem; }
+.rooms { list-style: none; padding: 0; }
+.rooms li { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }
 #version-tag {
   position: fixed; right: 0; bottom: 0; z-index: 50; padding: 0.15rem 0.5rem; font-size: 0.75rem;
   color: var(--dim); border-left: 1px solid var(--line); border-top: 1px solid var(--line); background: var(--ink);

@@ -137,6 +137,7 @@
   async function adminAction(method, path) {
     var res = await fetch(api + path, { method: method, headers: authHeaders(ownerToken()) });
     if (res.status === 404 && path === "") return showGone();
+    lastSignature = null;
     await refresh();
   }
 
@@ -246,10 +247,18 @@
   }
 
   // -- server calls ----------------------------------------------------------------------------
+  // the admin: the owner token this browser kept, or the server recognising the creating browser's cookie
+  function isAdmin() {
+    return Boolean(ownerToken()) || main.dataset.admin === "1";
+  }
+
+  var lastSignature = null;
+
   async function refresh() {
     var res = await fetch(api + "/state", { cache: "no-store" });
     if (res.status === 404) return showGone();
     var state = res.ok ? await res.json() : null;
+    var view = null;
     if (memory && memory.memberToken) {
       var me = await fetch(api + "/me", { headers: authHeaders(memory.memberToken), cache: "no-store" });
       if (me.status === 404) return showGone();
@@ -257,26 +266,35 @@
         // our membership is gone: rejected or removed by the admin, left from another tab, or the key was lost
         save(null);
         joinedView = false;
+        lastSignature = null;
         el.config.hidden = true;
         el.pending.hidden = true;
         el.join.hidden = false;
         showJoinError("this device is no longer in the room (not accepted, removed, or left). Join again if you need to.");
       } else if (me.ok) {
-        var view = await me.json();
-        if (view.approved) {
-          joinedView = true;
-          renderConfig(view);
-        } else {
-          joinedView = false;
-          renderPending();
-        }
+        view = await me.json();
+      }
+    }
+    var admin = null;
+    if (isAdmin()) {
+      var res2 = await fetch(api + "/admin", { headers: authHeaders(ownerToken()), cache: "no-store" });
+      if (res2.ok) admin = await res2.json();
+    }
+    // rebuild the page only when something changed, so links stay where the reader's cursor is
+    var signature = JSON.stringify([state, view, admin]);
+    if (signature === lastSignature) return;
+    lastSignature = signature;
+    if (view) {
+      if (view.approved) {
+        joinedView = true;
+        renderConfig(view);
+      } else {
+        joinedView = false;
+        renderPending();
       }
     }
     if (state) renderMembers(state);
-    if (ownerToken()) {
-      var admin = await fetch(api + "/admin", { headers: authHeaders(ownerToken()), cache: "no-store" });
-      if (admin.ok) renderAdmin(await admin.json());
-    }
+    if (admin) renderAdmin(admin);
   }
 
   async function join(name, ownPublicKey) {
@@ -318,9 +336,8 @@
   }
 
   async function endRoom() {
-    var token = ownerToken();
-    if (!token) return;
-    var res = await fetch(api, { method: "DELETE", headers: authHeaders(token) });
+    if (!isAdmin()) return;
+    var res = await fetch(api, { method: "DELETE", headers: authHeaders(ownerToken()) });
     if (res.ok || res.status === 404) {
       try { localStorage.removeItem(ownerKey); } catch (e) { /* ignore */ }
       save(null);
@@ -371,7 +388,7 @@
   }
 
   // -- start -----------------------------------------------------------------------------------
-  if (ownerToken()) el.owner.hidden = false;
+  if (isAdmin()) el.owner.hidden = false;
   if (memory && memory.memberToken) { el.join.hidden = true; }
   renderRoomLinkQr();
   tick();

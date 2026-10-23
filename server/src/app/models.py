@@ -14,6 +14,15 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Visitor(SQLModel, table=True):
+    """A browser: the hash of its cookie token and the address the cookie was issued to."""
+
+    id: str = Field(primary_key=True)  # sha256 of the cookie token
+    ip: str
+    created_at: datetime
+    last_seen: datetime
+
+
 class Room(SQLModel, table=True):
     id: str = Field(primary_key=True)
     name: str = ""
@@ -21,6 +30,8 @@ class Room(SQLModel, table=True):
     created_at: datetime
     expires_at: datetime
     owner_token: str
+    # the browser that created the room: its admin, alongside the owner token
+    visitor_id: str = Field(default="", index=True)
 
 
 class Member(SQLModel, table=True):
@@ -39,6 +50,8 @@ class Member(SQLModel, table=True):
     # where the join came from, shown to the admin only
     joined_ip: str = ""
     location: str = ""
+    # the browser that joined, so its front page can list the room
+    visitor_id: str = Field(default="", index=True)
 
 
 class Pair(SQLModel, table=True):
@@ -61,10 +74,14 @@ def create_db_and_tables(engine: Engine) -> None:
 # columns added after the first release, with the value an older row gets: SQLite's create_all never
 # alters a table that exists, so a deploy over an existing database adds them here
 _ADDED_COLUMNS = {
+    "room": [
+        ("visitor_id", "VARCHAR NOT NULL DEFAULT ''"),
+    ],
     "member": [
         ("approved", "BOOLEAN NOT NULL DEFAULT 0"),
         ("joined_ip", "VARCHAR NOT NULL DEFAULT ''"),
         ("location", "VARCHAR NOT NULL DEFAULT ''"),
+        ("visitor_id", "VARCHAR NOT NULL DEFAULT ''"),
     ],
 }
 
