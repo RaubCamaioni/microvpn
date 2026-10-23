@@ -45,11 +45,15 @@ def test_room_page_and_gone_page(client):
     assert "install WireGuard" in page and "Import tunnel(s) from file" in page
     assert "wg genkey | tee private.key | wg pubkey" in page and 'name="public_key"' in page
     assert 'id="new-profile"' in page and 'id="profiles"' in page and "your profiles/" in page
-    assert page.index('id="room-link"') < page.index('id="install"') < page.index('id="own-key"') < page.index('id="new-profile"') < page.index('id="profiles"')
+    # the new-profile row is the first item of the tree
+    assert page.index('id="room-link"') < page.index('id="install"') < page.index('id="own-key"') < page.index('id="profiles"')
+    assert page.index("your profiles/") < page.index('id="new-profile"') < page.index('id="profile-list"')
+    assert "a profile is one device" not in page
+    assert 'id="peers-legend"' not in page and "relay sees" not in page
     assert 'data-tab=' not in page
     assert "join.sh" not in page and "| sh" not in page
     assert 'id="requests"' in page and "accept" in page.lower()
-    assert "approximate location" in page and "db-ip.com" in page
+    assert "locations are approximate" in page and "db-ip.com" in page
     assert 'id="extend-form"' in page and 'name="lifetime"' in page
     assert 'id="admin-bar"' in page and "[ADMIN]" in page and 'id="expires"' in page
     assert page.index('class="title"') < page.index('id="expires"') < page.index('id="member-count"') < page.index('id="room-link"')

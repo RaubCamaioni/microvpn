@@ -85,6 +85,8 @@ class RelayPorts(Protocol):
 
     def slots_active(self, port: int, window: float = 30.0) -> int: ...
 
+    def member_stats(self, port: int, window: float = 40.0) -> dict[str, tuple[bool, int]]: ...
+
     def ports_in_use(self) -> int: ...
 
 
@@ -95,6 +97,8 @@ class MemberPublic:
     address: str
     public_key: str
     approved: bool
+    active: bool = False  # its tunnel sent something through the relay in the last 40 s
+    bytes: int = 0  # ciphertext bytes it has sent through the relay in this room
 
 
 @dataclass(frozen=True)
@@ -269,13 +273,24 @@ class RoomService:
         with self._session() as s:
             room = self._live_room(s, room_id)
             members = self._members(s, room)
-            return RoomView(
-                id=room.id,
-                name=room.name,
-                expires_at=room.expires_at,
-                max_members=self.settings.ROOM_MAX_MEMBERS,
-                members=[MemberPublic(m.id, m.name, m.address, m.public_key, m.approved) for m in members],
-            )
+            pairs = s.exec(select(Pair).where(Pair.room_id == room.id)).all()
+        # a member is connected when it sent through any of its pairs lately; bytes sum over its pairs
+        active: dict[str, bool] = {}
+        sent: dict[str, int] = {}
+        for pair in pairs:
+            for key, (is_active, count) in self.relay.member_stats(pair.port).items():
+                active[key] = active.get(key, False) or is_active
+                sent[key] = sent.get(key, 0) + count
+        return RoomView(
+            id=room.id,
+            name=room.name,
+            expires_at=room.expires_at,
+            max_members=self.settings.ROOM_MAX_MEMBERS,
+            members=[
+                MemberPublic(m.id, m.name, m.address, m.public_key, m.approved, active.get(m.public_key, False), sent.get(m.public_key, 0))
+                for m in members
+            ],
+        )
 
     def extend(self, room_id: str, owner_token: str | None, lifetime_hours: int | None, visitor_id: str = "") -> datetime:
         """Start the room's lifetime again from now: its own, or a chosen one. Admin only."""

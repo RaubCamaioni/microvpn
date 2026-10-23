@@ -59,21 +59,18 @@
   </ol>
 </details>
 
-<div id="new-profile">
-  <form id="profile-form" autocomplete="off">
-    <span class="dim">new profile</span>
-    <label>device name <input name="name" maxlength="32" required placeholder="rob-laptop"></label>
-    <label>public key <input name="public_key" maxlength="44" size="46" placeholder="optional"></label>
-    <button type="submit">[create]</button>
-  </form>
-  <p id="profile-error" class="error" hidden></p>
-  <p class="dim">a profile is one device in this room. The room's admin sees its alias, IP address and
-     approximate location before accepting it; the admin's own profiles are accepted at once.</p>
-</div>
-
-{# this browser's profiles in this room, as `tree` prints a directory #}
+{# this browser's profiles in this room, as `tree` prints a directory; the first item makes a new one #}
 <div id="profiles" class="tree">
   <div class="root">your profiles/</div>
+  <div id="new-profile" class="branch">
+    <span class="dim connector">├── </span>
+    <form id="profile-form" autocomplete="off">
+      <label>alias <input name="name" maxlength="32" required placeholder="rob-laptop"></label>
+      <label>public key <input name="public_key" maxlength="44" size="46" placeholder="optional"></label>
+      <button type="submit">[create]</button>
+    </form>
+  </div>
+  <p id="profile-error" class="error" hidden></p>
   <div id="profile-list"></div>
 </div>
 <p id="platform-hint" class="dim"></p>
@@ -89,7 +86,6 @@
 <section id="peers">
   <h2>members</h2>
   <ul id="peer-list"></ul>
-  <p class="dim" id="peers-legend" hidden>relay sees: ○ neither side · ◐ one side · ● both sides (last 30 s)</p>
 </section>
 
 <p class="dim notice">the server never sees a private key or a decrypted packet; it sees names, public keys,
