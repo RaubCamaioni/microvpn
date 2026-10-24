@@ -79,6 +79,14 @@
     if (className) s.className = className;
     return s;
   }
+  // a tree row: its connector (the stylesheet draws the lines) and, for an empty tree, a dim note
+  function branch(last, note) {
+    var row = document.createElement("div");
+    row.className = "branch";
+    row.appendChild(span(last ? "└── " : "├── ", "dim connector" + (last ? " last" : "")));
+    if (note) row.appendChild(span(note, "dim"));
+    return row;
+  }
 
   // -- platform: only Apple devices can take a tunnel from the browser (a configuration profile) ---
   function applePlatform() {
@@ -135,18 +143,11 @@
   function renderProfiles() {
     el["profile-list"].innerHTML = "";
     el["platform-hint"].textContent = memory.profiles.length ? HINTS[apple || "other"] : "";
-    if (!memory.profiles.length) {
-      var none = document.createElement("div");
-      none.className = "branch dim";
-      none.textContent = "└── no profiles yet";
-      el["profile-list"].appendChild(none);
-      return;
-    }
+    // the new-profile form is always the tree's last row, so every profile is a ├──
     memory.profiles.forEach(function (p, i) {
       var view = views[p.memberToken];
-      var row = document.createElement("div");
-      row.className = "branch" + (i === memory.selected ? " selected" : "");
-      row.appendChild(span(i === memory.profiles.length - 1 ? "└── " : "├── ", "dim connector"));
+      var row = branch(false);
+      if (i === memory.selected) row.classList.add("selected");
       row.appendChild(link(p.name, function () { memory.selected = i; save(); render(); }, "show this profile's peers in the members list"));
       if (!view) {
         row.appendChild(span("· …", "dim"));
@@ -178,10 +179,11 @@
     var accepted = state.members.filter(function (m) { return m.approved; });
     el["member-count"].textContent = accepted.length;
     el["peer-list"].innerHTML = "";
-    state.members.forEach(function (m) {
-      var li = document.createElement("li");
-      li.dataset.key = m.public_key;
-      li.className = m.approved && m.active ? "connected" : "";
+    if (!state.members.length) el["peer-list"].appendChild(branch(true, "no current connections"));
+    state.members.forEach(function (m, i) {
+      var row = branch(i === state.members.length - 1);
+      row.dataset.key = m.public_key;
+      if (m.approved && m.active) row.classList.add("connected");
       var text = span(m.name + " ");
       text.appendChild(span(m.approved ? m.address + " " : "(waiting for the admin) ", "addr"));
       if (m.approved) {
@@ -192,8 +194,8 @@
           text.appendChild(span(" · " + formatBytes(m.bytes), "dim"));
         }
       }
-      li.appendChild(text);
-      el["peer-list"].appendChild(li);
+      row.appendChild(text);
+      el["peer-list"].appendChild(row);
     });
   }
 
@@ -201,16 +203,9 @@
     var pending = admin.members.filter(function (m) { return !m.approved; });
     el.requests.hidden = false;
     el["request-list"].innerHTML = "";
-    if (!pending.length) {
-      var none = document.createElement("div");
-      none.className = "branch dim";
-      none.textContent = "└── no pending requests";
-      el["request-list"].appendChild(none);
-    }
+    if (!pending.length) el["request-list"].appendChild(branch(true, "no pending requests"));
     pending.forEach(function (m, i) {
-      var row = document.createElement("div");
-      row.className = "branch";
-      row.appendChild(span(i === pending.length - 1 ? "└── " : "├── ", "dim connector"));
+      var row = branch(i === pending.length - 1);
       row.appendChild(span(m.name));
       row.appendChild(span("· from " + (m.joined_ip || "?") + (m.location ? " (" + m.location + ")" : ""), "dim"));
       row.appendChild(link("[accept]", function () { adminAction("POST", "/members/" + m.id + "/approve"); }));

@@ -59,11 +59,13 @@
   </ol>
 </details>
 
-{# this browser's profiles in this room, as `tree` prints a directory; the first item makes a new one #}
+{# this browser's profiles in this room, as `tree` prints a directory; the last item makes a new one, so the
+   tree is never empty #}
 <div id="profiles" class="tree">
   <div class="root">your profiles/</div>
+  <div id="profile-list"></div>
   <div id="new-profile" class="branch">
-    <span class="dim connector">├── </span>
+    <span class="dim connector last">└── </span>
     <form id="profile-form" autocomplete="off">
       <label>alias <input name="name" maxlength="32" size="12" required placeholder="rob-laptop"></label>
       <label>public key <input name="public_key" maxlength="44" size="22" placeholder="optional"></label>
@@ -71,21 +73,21 @@
     </form>
   </div>
   <p id="profile-error" class="error" hidden></p>
-  <div id="profile-list"></div>
 </div>
 <p id="platform-hint" class="dim"></p>
 
 {# devices waiting for the admin, as a tree; shown to the admin even when empty #}
 <div id="requests" class="tree" {% if not is_admin %}hidden{% endif %}>
   <div class="root">pending requests/</div>
-  <div id="request-list"><div class="branch dim">└── no pending requests</div></div>
+  <div id="request-list"><div class="branch"><span class="dim connector last">└── </span><span class="dim">no pending requests</span></div></div>
 </div>
 
-<section id="peers">
-  <h2>members</h2>
-  <ul id="peer-list"></ul>
+{# everyone in the room, as a tree #}
+<div id="peers" class="tree">
+  <div class="root">members/</div>
+  <div id="peer-list"><div class="branch"><span class="dim connector last">└── </span><span class="dim">no current connections</span></div></div>
   <p id="members-hint" class="dim" hidden>to remove a member, end the room and make a new one.</p>
-</section>
+</div>
 
 <p class="dim notice">the server never sees a private key or a decrypted packet; it sees names, public keys,
 your public IP address and traffic timing. <a href="https://db-ip.com">IP Geolocation by DB-IP</a>.</p>
