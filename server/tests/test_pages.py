@@ -74,6 +74,14 @@ def test_every_page_url_carries_the_root_path(settings):
         assert room["url"] == settings.PUBLIC_URL + "/r/" + room["id"]
 
 
+def test_icons_are_linked_and_served(client):
+    page = client.get("/").text
+    for name, kind in [("favicon.svg", "image/svg+xml"), ("favicon.ico", "image/"), ("apple-touch-icon.png", "image/png")]:
+        assert f"/static/{name}?v=" in page
+        r = client.get(f"/static/{name}")
+        assert r.status_code == 200 and r.headers["content-type"].startswith(kind)
+
+
 def test_version_tag_on_every_page(client):
     assert re.search(r"v\d+\.\d+\.\d+\+([0-9a-f]{3,7}|dev)", client.get("/").text)
 
