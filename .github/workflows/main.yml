@@ -2,9 +2,10 @@ name: Build and publish microvpn image
 
 # Every push and pull request runs the test suite inside the image's `test` stage (exactly what
 # ./test.sh runs) and builds the `runtime` stage to prove it builds. The image is published (pushed
-# to Docker Hub as `latest`, which the server's update timer deploys) only for a release tag
-# `v<semver>` matching server/pyproject.toml, or when the workflow is run by hand with "publish"
-# ticked, and only once the DOCKER_USERNAME / DOCKER_TOKEN secrets exist on the repository.
+# to Docker Hub as `latest`, which the server's update timer deploys within a minute) only for a
+# release tag `v<semver>` matching server/pyproject.toml, or when the workflow is run by hand with
+# "publish" ticked, and only once the DOCKER_USERNAME / DOCKER_TOKEN secrets exist on the repository.
+# A merge to main does not deploy; tag a release.
 
 on:
   push:
