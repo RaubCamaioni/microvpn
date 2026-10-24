@@ -23,14 +23,14 @@ Create a room and share its link with the members.</p>
   <div class="root">your rooms/</div>
   {% for r in my_rooms %}
   <div class="branch">
-    <span class="dim">{{ '└── ' if loop.last else '├── ' }}</span><a href="{{ root_path }}/r/{{ r.id }}">{{ r.name or 'room ' ~ r.id[:8] }}</a>
+    <span class="dim connector{{ ' last' if loop.last }}">{{ '└── ' if loop.last else '├── ' }}</span><a href="{{ root_path }}/r/{{ r.id }}">{{ r.name or 'room ' ~ r.id[:8] }}</a>
     <span class="dim">{% if r.is_admin %}admin{% else %}member{% endif %}{% if r.devices %} as {{ r.devices | join(', ') }}{% endif %}
       · ends <span data-expires-at="{{ r.expires_at.isoformat() }}">{{ r.expires_at.strftime('%H:%M UTC') }}</span></span>
     {% if r.is_admin %}<a href="#" data-extend="{{ r.id }}" title="start the room's {{ r.lifetime_hours }}-hour lifetime again from now">[extend]</a>
     <a href="#" data-delete="{{ r.id }}">[delete]</a>{% endif %}
   </div>
   {% else %}
-  <div class="branch dim">└── no rooms yet</div>
+  <div class="branch"><span class="dim connector last">└── </span><span class="dim">no rooms yet</span></div>
   {% endfor %}
 </div>
 {% endblock %}

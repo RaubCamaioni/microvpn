@@ -24,7 +24,7 @@ def test_index_is_just_the_title_the_create_form_and_the_rooms_tree(client):
     assert "ends on its own" not in page and "how it works" not in page and "limits" not in page
     assert 'id="new-room"' in page and 'name="lifetime"' in page and "1 hour" in page and "24 hours" in page
     assert page.index('id="new-room"') < page.index("your rooms/")  # the form above the tree
-    assert "└── no rooms yet" in page
+    assert '<span class="dim connector last">└── </span><span class="dim">no rooms yet</span>' in page
     a = client.post("/rooms", json={"name": "game night", "lifetime_hours": 1}).json()
     b = client.post("/rooms", json={"name": "", "lifetime_hours": 4}).json()
     page = client.get("/").text
@@ -45,9 +45,13 @@ def test_room_page_and_gone_page(client):
     assert "install WireGuard" in page and "Import tunnel(s) from file" in page
     assert "wg genkey | tee private.key | wg pubkey" in page and 'name="public_key"' in page
     assert 'id="new-profile"' in page and 'id="profiles"' in page and "your profiles/" in page
-    # the new-profile row is the first item of the tree
+    # the new-profile row is the last item of the tree (a └──), so the tree always has a row
     assert page.index('id="room-link"') < page.index('id="install"') < page.index('id="own-key"') < page.index('id="profiles"')
-    assert page.index("your profiles/") < page.index('id="new-profile"') < page.index('id="profile-list"')
+    assert page.index("your profiles/") < page.index('id="profile-list"') < page.index('id="new-profile"')
+    form_row = page[page.index('id="new-profile"'):page.index('id="profile-form"')]
+    assert 'class="dim connector last">└── ' in form_row and "no profiles yet" not in page
+    # members are a tree too, with one row saying so until someone joins
+    assert page.index('id="peers"') < page.index("members/") < page.index("no current connections")
     assert "a profile is one device" not in page
     assert 'id="peers-legend"' not in page and "relay sees" not in page
     assert 'data-tab=' not in page
