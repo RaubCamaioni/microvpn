@@ -1,6 +1,6 @@
 # systemd user unit of the `microvpn` host user: the web app and relay in one rootless container.
 # Installed by deploy/setup.sh into ~/.config/systemd/user/. IMAGE is the Docker Hub image that every
-# push to main publishes; microvpn-update.timer pulls it and restarts this unit on a newer commit.
+# release tag publishes; microvpn-update.timer pulls it and restarts this unit on a newer commit.
 # build-on-server.sh builds the same tag locally to deploy any other ref by hand.
 [Unit]
 Description=microvpn web app and relay (rootless podman)

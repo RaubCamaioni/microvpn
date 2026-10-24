@@ -2,7 +2,7 @@
 # One-time setup of microvpn on the raubcamaioni.com host. Run as root: bash setup.sh
 # Creates the rootless `microvpn` user, clones the repository, installs the units and scripts from
 # the clone's deploy/ directory, opens the firewall, builds the image on the server, starts it and
-# enables the update timer that deploys every push to main from Docker Hub.
+# enables the update timer that deploys every release from Docker Hub.
 # Idempotent: safe to run again. Nothing runs on the host outside podman.
 set -euo pipefail
 user=microvpn

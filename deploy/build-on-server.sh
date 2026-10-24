@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the runtime image from the repository clone and restart the service. Runs as the
 # `microvpn` user on the host:   ~/microvpn/build-on-server.sh [ref]      (default: main)
-# Every push to main deploys itself (Docker Hub and update.sh); this deploys any ref by hand, e.g. a
+# Every release tag deploys itself (Docker Hub and update.sh); this deploys any ref by hand, e.g. a
 # branch to try out. The build takes the Hub image's tag, so microvpn.service runs it and update.sh
 # keeps it until Hub has a commit that is not already in it.
 set -euo pipefail

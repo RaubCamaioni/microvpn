@@ -66,7 +66,7 @@ Other settings: `DATABASE` (SQLite path, required), `ROOT_PATH` (URL prefix behi
 | `containers/Containerfile` | One file, three stages: `base` (deps), `test` (dev deps, node, sources; runs pytest), `runtime` (the shipped image, non-root). |
 | `deploy/` | Host setup for the production server: the rootless user, systemd user units, the server-side build, the Docker Hub update timer. |
 | `docs/superpowers/` | The design spec and the implementation plan. |
-| `.github/workflows/` | Tests and builds on every push; publishes (and so deploys) on a push to `main` or a release tag. |
+| `.github/workflows/` | Tests and builds on every push; publishes (and so deploys) on a release tag. |
 
 ## Running it
 
@@ -103,14 +103,14 @@ host, behind the site's nginx at `/microvpn/`. `deploy/setup.sh` (run once, as r
 user, installs the units and firewall rules, clones this repository and builds the image on the
 server.
 
-Every push to `main` (a merged pull request) deploys itself, the way the blog does: the workflow
-publishes `raubcamaioni/microvpn:latest` to Docker Hub (with the `DOCKER_USERNAME` and
+A release deploys the way PyTools does: bump `version` in `server/pyproject.toml`, merge, tag
+`vX.Y.Z` and push the tag. The workflow refuses a tag that does not match the version, publishes
+`raubcamaioni/microvpn` to Docker Hub as `latest` and the version (with the `DOCKER_USERNAME` and
 `DOCKER_TOKEN` repository secrets), and the server's `microvpn-update.timer` pulls it and restarts
-within a minute when it carries a newer commit. A release tag `vX.Y.Z` also publishes the version
-tag; the workflow refuses one that does not match `version` in `server/pyproject.toml`.
+within a minute when it carries a newer commit. A merge to `main` alone deploys nothing.
 
 `deploy/build-on-server.sh` builds and deploys any other ref by hand, under the same image tag;
-the timer leaves it running until `main` moves past it:
+the timer leaves it running until a release has a commit it does not contain:
 
 ```bash
 ssh root@<host> 'sudo -iu microvpn /home/microvpn/microvpn/build-on-server.sh <ref>'
