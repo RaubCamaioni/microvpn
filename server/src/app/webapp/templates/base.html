@@ -15,7 +15,8 @@
     {# cwd as /home/<app>/...: "home" is the site's landing page (outside the mount), "<app>" this app's front page #}
     <span class="prompt"><span class="dim">guest@microvpn</span>:/<a href="/">home</a>/<a href="{{ root_path }}/">{{ root_path.strip('/') or 'microvpn' }}</a>{{ cwd | default('') }}<span class="dim"> $</span></span>
     <nav>
-      <a href="{{ root_path }}/">[home]</a>
+      {# the bracket for the current page is inverted, as in the other apps #}
+      <a href="{{ root_path }}/"{% if request.url.path[root_path|length:] in ('', '/') %} class="on"{% endif %}>[home]</a>
       <a href="https://github.com/RaubCamaioni/microvpn">[github]</a>
     </nav>
   </header>
