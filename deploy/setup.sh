@@ -1,7 +1,8 @@
 #!/bin/bash
 # One-time setup of microvpn on the raubcamaioni.com host. Run as root: bash setup.sh
 # Creates the rootless `microvpn` user, clones the repository, installs the units and scripts from
-# the clone's deploy/ directory, opens the firewall, builds the image on the server and starts it.
+# the clone's deploy/ directory, opens the firewall, builds the image on the server, starts it and
+# enables the update timer that deploys every push to main from Docker Hub.
 # Idempotent: safe to run again. Nothing runs on the host outside podman.
 set -euo pipefail
 user=microvpn
@@ -40,5 +41,5 @@ ufw allow from 172.18.0.0/16 to 172.18.0.1 port 8082 proto tcp comment "nginx ->
 echo "== first build and start"
 as_user "systemctl --user enable microvpn.service >/dev/null 2>&1"
 as_user "./microvpn/build-on-server.sh main"
-echo "setup done. The update timer stays disabled until the image comes from Docker Hub:"
-echo "  sudo -iu $user systemctl --user enable --now microvpn-update.timer"
+as_user "systemctl --user enable --now microvpn-update.timer >/dev/null 2>&1"
+echo "setup done"

@@ -2,9 +2,10 @@ name: Build and publish microvpn image
 
 # Every push and pull request runs the test suite inside the image's `test` stage (exactly what
 # ./test.sh runs) and builds the `runtime` stage to prove it builds. The image is published (pushed
-# to Docker Hub as `latest`, which the server's update timer deploys) only for a release tag
-# `v<semver>` matching server/pyproject.toml, or when the workflow is run by hand with "publish"
-# ticked, and only once the DOCKER_USERNAME / DOCKER_TOKEN secrets exist on the repository.
+# to Docker Hub as `latest`, which the server's update timer deploys within a minute) for a push to
+# `main` (a merged pull request), for a release tag `v<semver>` matching server/pyproject.toml, or
+# when the workflow is run by hand with "publish" ticked, and only once the DOCKER_USERNAME /
+# DOCKER_TOKEN secrets exist on the repository.
 
 on:
   push:
@@ -21,7 +22,7 @@ on:
         default: true
 
 env:
-  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
   HAVE_HUB: ${{ secrets.DOCKER_USERNAME != '' }}
 
 jobs:
@@ -58,7 +59,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ secrets.DOCKER_USERNAME || 'local' }}/microvpn
-          # only two tags per release (latest and the version); a manual deploy is tagged with its commit;
+          # latest for every publish plus the version for a release tag; a manual deploy is tagged with its commit;
           # a plain build (push or pull request) gets a `build` tag that is never pushed
           tags: |
             type=semver,pattern={{version}}

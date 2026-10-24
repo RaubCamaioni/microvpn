@@ -1,7 +1,7 @@
 #!/bin/bash
 # Pull the microvpn image and restart only when it is NEWER than what is running (revisions
 # compared by git ancestry in ~/microvpn/repo), the way PyTools and the catalog update.
-# Run by microvpn-update.timer once the image comes from Docker Hub.
+# Run every minute by microvpn-update.timer; every push to main publishes the image.
 set -euo pipefail
 IMAGE=docker.io/raubcamaioni/microvpn:latest
 LABEL="org.opencontainers.image.revision"

@@ -66,7 +66,7 @@ Other settings: `DATABASE` (SQLite path, required), `ROOT_PATH` (URL prefix behi
 | `containers/Containerfile` | One file, three stages: `base` (deps), `test` (dev deps, node, sources; runs pytest), `runtime` (the shipped image, non-root). |
 | `deploy/` | Host setup for the production server: the rootless user, systemd user units, the server-side build, the Docker Hub update timer. |
 | `docs/superpowers/` | The design spec and the implementation plan. |
-| `.github/workflows/` | Tests and builds on every push; publishes on a release tag. |
+| `.github/workflows/` | Tests and builds on every push; publishes (and so deploys) on a push to `main` or a release tag. |
 
 ## Running it
 
@@ -101,18 +101,20 @@ relay tests bind real UDP sockets on localhost. `.devcontainer/` opens the repos
 Production is one rootless podman container under the `microvpn` user on the raubcamaioni.com
 host, behind the site's nginx at `/microvpn/`. `deploy/setup.sh` (run once, as root) creates the
 user, installs the units and firewall rules, clones this repository and builds the image on the
-server; `deploy/build-on-server.sh` rebuilds and restarts from any ref:
+server.
+
+Every push to `main` (a merged pull request) deploys itself, the way the blog does: the workflow
+publishes `raubcamaioni/microvpn:latest` to Docker Hub (with the `DOCKER_USERNAME` and
+`DOCKER_TOKEN` repository secrets), and the server's `microvpn-update.timer` pulls it and restarts
+within a minute when it carries a newer commit. A release tag `vX.Y.Z` also publishes the version
+tag; the workflow refuses one that does not match `version` in `server/pyproject.toml`.
+
+`deploy/build-on-server.sh` builds and deploys any other ref by hand, under the same image tag;
+the timer leaves it running until `main` moves past it:
 
 ```bash
-ssh root@<host> 'sudo -iu microvpn /home/microvpn/microvpn/build-on-server.sh main'
+ssh root@<host> 'sudo -iu microvpn /home/microvpn/microvpn/build-on-server.sh <ref>'
 ```
-
-Once the `DOCKER_USERNAME` and `DOCKER_TOKEN` secrets exist on the repository, a release deploys
-the way PyTools and the CadQuery Catalog do: bump `version` in `server/pyproject.toml`, merge, tag
-`vX.Y.Z` and push the tag. The workflow refuses a tag that does not match the version, publishes
-`raubcamaioni/microvpn` as `latest` and the version, and the server's `microvpn-update.timer`
-pulls and restarts within a minute. Switching the server over is a one-line change of `IMAGE=` in
-`microvpn.service` and `systemctl --user enable --now microvpn-update.timer`.
 
 ## Out of scope, for now
 
