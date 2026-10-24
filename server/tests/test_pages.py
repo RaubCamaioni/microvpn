@@ -15,7 +15,8 @@ STATIC = Path(__file__).resolve().parents[1] / "src/app/webapp/static"
 
 def unprefixed(page):
     urls = re.findall(r'(?:href|src|action)="(/[^"]*)"', page)
-    return [u for u in urls if not u.startswith(PREFIX + "/") and u != PREFIX]
+    # "/" is the prompt's `home`, the site's landing page, deliberately outside the mount
+    return [u for u in urls if not u.startswith(PREFIX + "/") and u != PREFIX and u != "/"]
 
 
 def test_index_is_just_the_title_the_create_form_and_the_rooms_tree(client):
@@ -84,6 +85,15 @@ def test_icons_are_linked_and_served(client):
         assert f"/static/{name}?v=" in page
         r = client.get(f"/static/{name}")
         assert r.status_code == 200 and r.headers["content-type"].startswith(kind)
+
+
+def test_prompt_path_links_the_site_home_and_the_app_home(settings):
+    with TestClient(create_app(settings, relay=FakeRelay()), root_path=PREFIX) as c:
+        app = PREFIX.strip("/")
+        assert f':/<a href="/">home</a>/<a href="{PREFIX}/">{app}</a><span' in c.get(PREFIX + "/").text
+        room = c.post(PREFIX + "/rooms", json={"name": "", "lifetime_hours": 1}).json()
+        page = c.get(PREFIX + f"/r/{room['id']}").text
+        assert f'<a href="{PREFIX}/">{app}</a>/r/{room["id"][:8]}<span' in page
 
 
 def test_version_tag_on_every_page(client):
