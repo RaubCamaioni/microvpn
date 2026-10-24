@@ -12,7 +12,8 @@
 </head>
 <body data-root-path="{{ root_path }}">
   <header>
-    <span class="prompt"><span class="dim">guest@microvpn</span>:{{ cwd | default('~') }}<span class="dim"> $</span></span>
+    {# cwd as /home/<app>/...: "home" is the site's landing page (outside the mount), "<app>" this app's front page #}
+    <span class="prompt"><span class="dim">guest@microvpn</span>:/<a href="/">home</a>/<a href="{{ root_path }}/">{{ root_path.strip('/') or 'microvpn' }}</a>{{ cwd | default('') }}<span class="dim"> $</span></span>
     <nav>
       <a href="{{ root_path }}/">[home]</a>
       <a href="https://github.com/RaubCamaioni/microvpn">[github]</a>

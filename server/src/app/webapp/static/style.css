@@ -20,6 +20,7 @@ header {
 header nav { display: flex; gap: 1ch; }
 main { max-width: 60rem; margin: 0 auto; }
 .prompt b { color: var(--paper); font-weight: normal; }
+.prompt a { padding: 0; }
 .dim { color: var(--dim); }
 h1 { font-size: 1.1rem; font-weight: bold; margin: 0 0 1rem; }
 h2 { font-size: 1rem; font-weight: bold; margin: 2rem 0 0.5rem; }

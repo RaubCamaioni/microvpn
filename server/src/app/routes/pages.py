@@ -30,7 +30,7 @@ def room_page(room_id: str, request: Request):
     context = {
         "room": room,
         "settings": request.app.state.settings,
-        "cwd": f"~/r/{room.id[:8]}",
+        "cwd": f"/r/{room.id[:8]}",
         "is_admin": service.is_admin(room_id, visitor(request)),
     }
     return TEMPLATES.TemplateResponse(request, "room.html", context)
