@@ -13,11 +13,14 @@ body {
   line-height: 1.6;
   padding: 0 1rem 4rem;
 }
+/* the top bar every app on the site shares: full width (out of the body's gutter), 14px, dim brackets */
 header {
-  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 2ch;
-  padding: 0.5rem 0; border-bottom: 1px solid var(--line); margin-bottom: 1.5rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem;
+  margin: 0 -1rem 1.5rem; padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); font-size: 14px;
 }
-header nav { display: flex; gap: 1ch; }
+header nav { margin-left: auto; display: flex; flex-wrap: wrap; gap: 0.25rem; }
+header nav a { color: var(--dim); padding: 0 0.25rem; }
+header nav a:hover, header nav a:focus-visible, header nav a.on { background: var(--paper); color: var(--ink); }
 main { max-width: 60rem; margin: 0 auto; }
 .prompt b { color: var(--paper); font-weight: normal; }
 .prompt a { padding: 0; }
