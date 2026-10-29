@@ -13,7 +13,7 @@ import hmac
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, NamedTuple
 
 from app.settings import Settings
 
@@ -100,6 +100,18 @@ class Slot:
     addr: tuple
     last_seen: float
     member: int  # 0 or 1: which of the pair's members sends from this address
+    last_data: float = float("-inf")  # when it last sent transport data: proof its handshake completed
+
+
+class MemberStats(NamedTuple):
+    """One member's traffic through a port. The message type is plaintext in WireGuard, so the relay can
+    tell handshakes from transport data without reading anything: a device sends transport data (even a
+    keepalive) only once a handshake gave it session keys. A device whose handshakes never complete,
+    because its private key does not match the public key its peers have, is seen but never active."""
+
+    active: bool  # sent transport data within the window: its tunnel is up
+    seen: bool  # sent anything within the window
+    bytes: int  # ciphertext bytes sent through this port so far
 
 
 class PairPort(asyncio.DatagramProtocol):
@@ -145,7 +157,9 @@ class PairPort(asyncio.DatagramProtocol):
                 sender = Slot(addr, now, member)
                 self.slots.append(sender)
             else:
-                sender.addr, sender.last_seen = addr, now
+                sender.addr, sender.last_seen, sender.last_data = addr, now, float("-inf")
+        if kind == TRANSPORT_DATA:
+            sender.last_data = now
         self.bytes_from[sender.member] += len(data)
         other = next((s for s in self.slots if s is not sender), None)
         if other is None or self.transport is None:
@@ -157,13 +171,16 @@ class PairPort(asyncio.DatagramProtocol):
         now = self.clock()
         return sum(1 for s in self.slots if now - s.last_seen <= window)
 
-    def member_stats(self, window: float) -> dict[str, tuple[bool, int]]:
-        """Per public key: whether that member sent anything within `window` seconds, and its bytes so far."""
+    def member_stats(self, window: float) -> dict[str, MemberStats]:
+        """Per public key: whether that member sent transport data, or anything, within `window` seconds, and
+        its bytes so far."""
         now = self.clock()
         stats = {}
         for index, key in enumerate(self.keys):
-            active = any(s.member == index and now - s.last_seen <= window for s in self.slots)
-            stats[key] = (active, self.bytes_from[index])
+            mine = [s for s in self.slots if s.member == index]
+            active = any(now - s.last_data <= window for s in mine)
+            seen = any(now - s.last_seen <= window for s in mine)
+            stats[key] = MemberStats(active, seen, self.bytes_from[index])
         return stats
 
 
@@ -229,9 +246,9 @@ class Relay:
         entry = self._ports.get(port)
         return entry[1].active_slots(window) if entry else 0
 
-    def member_stats(self, port: int, window: float = 40.0) -> dict[str, tuple[bool, int]]:
-        """{public key: (sent within the window, bytes sent)} for the pair on `port`; {} for an unknown port.
-        The window covers WireGuard's 25-second keepalive, so an active tunnel is always 'sending'."""
+    def member_stats(self, port: int, window: float = 40.0) -> dict[str, MemberStats]:
+        """{public key: MemberStats} for the pair on `port`; {} for an unknown port. The window covers
+        WireGuard's 25-second keepalive, so an established tunnel is always 'sending' transport data."""
         entry = self._ports.get(port)
         return entry[1].member_stats(window) if entry else {}
 
