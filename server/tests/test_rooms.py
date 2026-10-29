@@ -18,6 +18,7 @@ from app.rooms import (
     TooManyRooms,
     Unauthorized,
 )
+from app.relay import MemberStats
 from app.wgconfig import PRIVATE_KEY_PLACEHOLDER
 from tests.conftest import FakeRelay, fake_locate, make_settings
 
@@ -331,10 +332,14 @@ async def test_room_view_reports_connection_and_transfer_per_member(svc):
     b = await admit(svc, r, "b", KEY(2))
     c = await admit(svc, r, "c", KEY(3))
     ports = {tuple(sorted(v)): k for k, v in svc.relay.keys.items()}
-    svc.relay.stats[ports[tuple(sorted((KEY(1), KEY(2))))]] = {KEY(1): (True, 1000), KEY(2): (True, 50)}
-    svc.relay.stats[ports[tuple(sorted((KEY(1), KEY(3))))]] = {KEY(1): (True, 24), KEY(3): (False, 0)}
-    view = {m.name: (m.active, m.bytes) for m in svc.room_view(r.id).members}
-    assert view == {"a": (True, 1024), "b": (True, 50), "c": (False, 0)}  # summed over a member's pairs
+    up, trying, idle = MemberStats(True, True, 0), MemberStats(False, True, 0), MemberStats(False, False, 0)
+    svc.relay.stats[ports[tuple(sorted((KEY(1), KEY(2))))]] = {KEY(1): up._replace(bytes=1000), KEY(2): up._replace(bytes=50)}
+    svc.relay.stats[ports[tuple(sorted((KEY(1), KEY(3))))]] = {KEY(1): up._replace(bytes=24), KEY(3): trying._replace(bytes=148)}
+    view = {m.name: (m.active, m.handshaking, m.bytes) for m in svc.room_view(r.id).members}
+    # summed over a member's pairs; c only sends handshakes that never complete (its keys do not match)
+    assert view == {"a": (True, False, 1024), "b": (True, False, 50), "c": (False, True, 148)}
+    svc.relay.stats[ports[tuple(sorted((KEY(1), KEY(3))))]] = {KEY(1): up._replace(bytes=24), KEY(3): idle}
+    assert [(m.active, m.handshaking) for m in svc.room_view(r.id).members if m.name == "c"] == [(False, False)]
     d = await svc.join(r.id, "d", KEY(4))  # pending: no pairs, nothing to report
     assert [(m.name, m.active, m.bytes) for m in svc.room_view(r.id).members][-1] == ("d", False, 0)
 

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.app import create_app
+from app.relay import MemberStats
 from app.settings import Settings
 
 
@@ -29,7 +30,7 @@ class FakeRelay:
         self.activity: dict[int, int] = {}
         self.fail_ports: set[int] = set()
         self.keys: dict[int, tuple[str, str]] = {}
-        self.stats: dict[int, dict[str, tuple[bool, int]]] = {}
+        self.stats: dict[int, dict[str, MemberStats]] = {}
 
     async def open(self, port: int, room_id: str, keys: tuple[str, str] | None = None) -> bool:
         if port in self.fail_ports or port in self.opened:
@@ -51,12 +52,12 @@ class FakeRelay:
     def slots_active(self, port: int, window: float = 30.0) -> int:
         return self.activity.get(port, 0)
 
-    def member_stats(self, port: int, window: float = 40.0) -> dict[str, tuple[bool, int]]:
-        """Tests fill self.stats[port] = {public_key: (active, bytes)}; unknown ports report both keys idle."""
+    def member_stats(self, port: int, window: float = 40.0) -> dict[str, MemberStats]:
+        """Tests fill self.stats[port] = {public_key: MemberStats}; unknown ports report both keys idle."""
         if port in self.stats:
             return self.stats[port]
         keys = self.keys.get(port)
-        return {k: (False, 0) for k in keys} if keys else {}
+        return {k: MemberStats(False, False, 0) for k in keys} if keys else {}
 
     def ports_in_use(self) -> int:
         return len(self.opened)
