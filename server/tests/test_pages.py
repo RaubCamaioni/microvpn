@@ -45,6 +45,8 @@ def test_room_page_and_gone_page(client):
     # top: install steps and own-key steps, both folded away, then the new-profile form, then the profiles tree
     assert "install WireGuard" in page and "Import tunnel(s) from file" in page
     assert "wg genkey | tee private.key | wg pubkey" in page and 'name="public_key"' in page
+    assert "wg pubkey &lt; private.key" in page and "Handshaking…" in page  # how to check the pair, and the symptom
+    assert "[cli]" in page and "__PRIVATE_KEY__" in page  # where the exact commands are, and what they replace
     assert 'id="new-profile"' in page and 'id="profiles"' in page and "your profiles/" in page
     # the new-profile row is the last item of the tree (a └──), so the tree always has a row
     assert page.index('id="room-link"') < page.index('id="install"') < page.index('id="own-key"') < page.index('id="profiles"')

@@ -53,9 +53,14 @@
         <pre>wg genkey | tee private.key | wg pubkey</pre></li>
     <li>Paste the printed public key into the new-profile form below. Leave it empty instead and this browser
         makes the key, which never leaves this device.</li>
-    <li>In that profile's config, replace <code>PrivateKey = __PRIVATE_KEY__</code> with the contents of private.key,
-        then import it. (WireGuard for Windows: <em>Add empty tunnel</em> makes a key pair too; copy its public key
-        here and paste the rest of the config into that tunnel.)</li>
+    <li>Download that profile's config to the machine that holds private.key. The profile's [cli] shows the
+        commands for its file names: a <code>sed</code> that writes the config with the key in place of
+        <code>__PRIVATE_KEY__</code>, and the <code>wg-quick up</code> that starts the tunnel. (WireGuard for
+        Windows: <em>Add empty tunnel</em> makes a key pair too; copy its public key here, then paste everything
+        below the config's PrivateKey line into that tunnel.)</li>
+    <li>The two keys must be a pair: <code>wg pubkey &lt; private.key</code> must print the public key shown
+        beside the profile. A device whose keys do not match shows <span class="warn">Handshaking…</span> in the
+        members list: it reaches the relay, but its peers cannot complete a handshake with it.</li>
   </ol>
 </details>
 

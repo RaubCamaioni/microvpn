@@ -131,6 +131,7 @@
 
   // -- what the server says about each profile (by member token), refreshed by the poll ------------
   var views = {};  // token -> /me response
+  var cliOpen = {};  // token -> whether the profile's [cli] block is shown
   var lastSignature = null;
 
   function configTextOf(profile) {
@@ -156,12 +157,18 @@
       } else {
         var peers = view.peers.length + " peer" + (view.peers.length === 1 ? "" : "s");
         row.appendChild(span("· " + p.address + " · " + peers + (p.privateKey ? "" : " · key kept elsewhere"), "dim"));
+        row.appendChild(span(p.publicKey, "key"));
         var note = staleNote(p, view);
         if (note) row.appendChild(span(note, "stale"));
         row.appendChild(link("[download]", function () { downloadProfile(p); }, "the .conf file for the WireGuard app"));
         row.appendChild(link("[copy]", function () { copyProfile(p); }, "the config text to the clipboard"));
         row.appendChild(link("[QR]", function () { memory.selected = i; save(); render(); showProfileQr(p); }, "scan with the phone app"));
         if (apple && p.privateKey) row.appendChild(link("[add to WireGuard]", function () { addToWireGuard(p); }));
+        if (!p.privateKey) {
+          row.appendChild(link("[cli]", function () { cliOpen[p.memberToken] = !cliOpen[p.memberToken]; render(); },
+            "the commands that put private.key into the downloaded config and start the tunnel"));
+          if (cliOpen[p.memberToken]) row.appendChild(cliBlock(p));
+        }
       }
       row.appendChild(link("[remove]", function () { removeProfile(i); }, "leave the room with this profile"));
       el["profile-list"].appendChild(row);
@@ -190,11 +197,14 @@
         if (accepted.length < 2) {
           text.appendChild(span("waiting for a peer", "dim"));
         } else {
-          text.appendChild(span(m.active ? "Connected" : "Disconnected", m.active ? "ok" : "bad"));
+          // handshaking: it reaches the relay but no handshake completes, so its private key does not match this public key
+          var state = m.active ? ["Connected", "ok"] : m.handshaking ? ["Handshaking…", "warn"] : ["Disconnected", "bad"];
+          text.appendChild(span(state[0], state[1]));
           text.appendChild(span(" · " + formatBytes(m.bytes), "dim"));
         }
       }
       row.appendChild(text);
+      row.appendChild(span(m.public_key, "key"));
       el["peer-list"].appendChild(row);
     });
   }
@@ -354,6 +364,19 @@
     document.body.appendChild(a);
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  // the shell commands for a profile whose key lives on the device: the download is named for the profile,
+  // the running config for the room alone, since wg-quick wants a file name that fits an interface name
+  function cliBlock(p) {
+    var pre = document.createElement("pre");
+    pre.className = "cli";
+    pre.textContent = [
+      "# on the machine that holds private.key, in the folder with the downloaded config",
+      "wg pubkey < private.key   # must print " + p.publicKey,
+      'sed "s|__PRIVATE_KEY__|$(cat private.key)|" ' + fileTag(p) + ".conf > mv" + shortId + ".conf",
+      "sudo wg-quick up ./mv" + shortId + ".conf",
+    ].join("\n");
+    return pre;
   }
   function fileTag(p) {
     return "mv" + shortId + "-" + p.name.replace(/[^A-Za-z0-9_=+.-]/g, "-").slice(0, 12);
