@@ -27,7 +27,9 @@ VISITOR_COOKIE = "microvpn_visitor"
 class VisitorMiddleware:
     """The browser identity. Every page and API request gets a visitor id in `request.state`: the one
     behind the `microvpn_visitor` cookie when that cookie is known and was issued to the request's
-    address, else a fresh one whose cookie is set on the response. Static files and healthz are skipped."""
+    address, else "". A browser is recorded only when it creates or joins a room: the route then
+    leaves the new cookie token in `request.state.visitor_token` and it is set on the response.
+    Static files and healthz are skipped."""
 
     def __init__(self, app, rooms: RoomService, settings: Settings):
         self.app = app
@@ -51,11 +53,12 @@ class VisitorMiddleware:
             cookie = SimpleCookie()
         token = cookie[VISITOR_COOKIE].value if VISITOR_COOKIE in cookie else None
         client_ip = headers.get("x-real-ip") or (scope.get("client") or ("unknown",))[0]
-        visitor_id, new_token = await asyncio.to_thread(self.rooms.visitor, token, client_ip)
-        scope.setdefault("state", {})["visitor_id"] = visitor_id
+        state = scope.setdefault("state", {})
+        state["visitor_id"] = await asyncio.to_thread(self.rooms.visitor, token, client_ip) if token else ""
 
         async def send_with_cookie(message):
-            if message["type"] == "http.response.start" and new_token is not None:
+            new_token = state.get("visitor_token")
+            if message["type"] == "http.response.start" and new_token:
                 message.setdefault("headers", [])
                 MutableHeaders(raw=message["headers"]).append("set-cookie", f"{VISITOR_COOKIE}={new_token}{self.cookie_attrs}")
             await send(message)

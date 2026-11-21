@@ -191,24 +191,28 @@ class RoomService:
     def visitor_id_of(token: str) -> str:
         return hashlib.sha256(token.encode()).hexdigest()
 
-    def visitor(self, token: str | None, client_ip: str) -> tuple[str, str | None]:
+    def visitor(self, token: str | None, client_ip: str) -> str:
         """The visitor id for a cookie token, when the token is known and was issued to this address;
-        otherwise a fresh visitor. Returns (visitor id, new token to set or None)."""
+        otherwise "". Nothing is written for a browser that is not known: it gets its record, and its
+        cookie, when it first creates or joins a room."""
+        if not token:
+            return ""
         now = self.now()
         with self._session() as s:
-            if token:
-                row = s.get(Visitor, self.visitor_id_of(token))
-                if row is not None and row.ip == client_ip:
-                    if now - row.last_seen > timedelta(hours=1):
-                        row.last_seen = now
-                        s.add(row)
-                        s.commit()
-                    return row.id, None
-            new_token = keys.new_token()
-            row = Visitor(id=self.visitor_id_of(new_token), ip=client_ip, created_at=now, last_seen=now)
-            s.add(row)
-            s.commit()
-            return row.id, new_token
+            row = s.get(Visitor, self.visitor_id_of(token))
+            if row is None or row.ip != client_ip:
+                return ""
+            if now - row.last_seen > timedelta(hours=1):
+                row.last_seen = now
+                s.add(row)
+                s.commit()
+            return row.id
+
+    def _new_visitor(self, s: Session, token: str, client_ip: str, now: datetime) -> str:
+        """Record the browser that will hold `token` as its cookie (the caller commits); returns its id."""
+        row = Visitor(id=self.visitor_id_of(token), ip=client_ip, created_at=now, last_seen=now)
+        s.add(row)
+        return row.id
 
     def rooms_of_visitor(self, visitor_id: str) -> list[MyRoom]:
         """Live rooms this browser created or joined, newest first."""
@@ -241,7 +245,16 @@ class RoomService:
 
     # -- rooms --------------------------------------------------------------------------------
 
-    def create_room(self, name: str | None, lifetime_hours: int, client_ip: str, visitor_id: str = "") -> Room:
+    def create_room(
+        self,
+        name: str | None,
+        lifetime_hours: int,
+        client_ip: str,
+        visitor_id: str = "",
+        visitor_token: str | None = None,
+    ) -> Room:
+        """`visitor_id` is the creating browser when it is known; for one that is not, `visitor_token`
+        is the cookie it is about to get, and the browser is recorded with the room."""
         clean = keys.clean_room_name(name)
         if clean is None:
             raise Invalid(f"room name: up to {keys.ROOM_NAME_MAX} printable characters")
@@ -254,6 +267,8 @@ class RoomService:
             live = s.exec(select(Room).where(Room.expires_at > now)).all()
             if len(live) >= self.settings.ROOM_MAX_LIVE:
                 raise TooManyRooms()
+            if not visitor_id and visitor_token:
+                visitor_id = self._new_visitor(s, visitor_token, client_ip, now)
             room = Room(
                 id=keys.new_room_id(),
                 name=clean,
@@ -415,10 +430,12 @@ class RoomService:
         owner_token: str | None = None,
         client_ip: str = "",
         visitor_id: str = "",
+        visitor_token: str | None = None,
     ) -> Member:
         """Add a device to the room. It waits for the admin unless the join comes from the admin (the
         owner token, or the creating browser's cookie), in which case it is accepted at once. The
-        address it joined from and its approximate location are kept for the admin's decision."""
+        address it joined from and its approximate location are kept for the admin's decision. A
+        browser that is not known yet (no `visitor_id`) is recorded under `visitor_token`, its new cookie."""
         clean = keys.clean_device_name(name)
         if clean is None:
             raise Invalid(f"device name: 1 to {keys.DEVICE_NAME_MAX} printable characters")
@@ -442,6 +459,8 @@ class RoomService:
                     self._joins, client_ip, now, self.settings.ROOM_JOIN_PER_IP_PER_HOUR,
                     "too many devices joined from this address; try later",
                 )
+                if not visitor_id and visitor_token:
+                    visitor_id = self._new_visitor(s, visitor_token, client_ip, now)
                 member = Member(
                     room_id=room.id,
                     name=clean,

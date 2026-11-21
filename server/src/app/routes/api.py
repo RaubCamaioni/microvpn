@@ -5,6 +5,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
+from app import keys
 from app.rooms import RoomService, Unauthorized
 
 router = APIRouter()
@@ -34,8 +35,19 @@ def client_ip(request: Request) -> str:
 
 
 def visitor(request: Request) -> str:
-    """The browser behind the request's cookie (set by VisitorMiddleware); "" for skipped paths."""
+    """The browser behind the request's cookie (set by VisitorMiddleware); "" when it is not known."""
     return getattr(request.state, "visitor_id", "") or ""
+
+
+def new_visitor_token(request: Request) -> str | None:
+    """A cookie token for a browser the server does not know; None for a known browser."""
+    return None if visitor(request) else keys.new_token()
+
+
+def set_visitor_cookie(request: Request, token: str | None) -> None:
+    """Have VisitorMiddleware set the cookie, once the service has recorded the browser under it."""
+    if token:
+        request.state.visitor_token = token
 
 
 def bearer_or_none(request: Request) -> str | None:
@@ -62,7 +74,11 @@ def healthz(request: Request):
 
 @router.post("/rooms", status_code=201)
 def create_room(body: CreateRoom, request: Request):
-    room = rooms(request).create_room(body.name, body.lifetime_hours, client_ip(request), visitor_id=visitor(request))
+    token = new_visitor_token(request)
+    room = rooms(request).create_room(
+        body.name, body.lifetime_hours, client_ip(request), visitor_id=visitor(request), visitor_token=token
+    )
+    set_visitor_cookie(request, token)
     public_url = request.app.state.settings.PUBLIC_URL.rstrip("/")
     return {
         "id": room.id,
@@ -86,6 +102,7 @@ def room_state(room_id: str, request: Request):
 @router.post("/r/{room_id}/members", status_code=201)
 async def join_room(room_id: str, body: JoinRoom, request: Request):
     # the admin's own device (owner token, or the creating browser's cookie) is accepted at once; everyone else waits
+    token = new_visitor_token(request)
     member = await rooms(request).join(
         room_id,
         body.name,
@@ -93,7 +110,9 @@ async def join_room(room_id: str, body: JoinRoom, request: Request):
         owner_token=bearer_or_none(request),
         client_ip=client_ip(request),
         visitor_id=visitor(request),
+        visitor_token=token,
     )
+    set_visitor_cookie(request, token)
     return {"member_token": member.token, "address": member.address, "approved": member.approved}
 
 
