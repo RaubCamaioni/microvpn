@@ -109,6 +109,8 @@ details[open] summary { margin-bottom: 0.5rem; }
 .bad { color: #f87171; }
 /* a public key beside a profile or member, to compare with `wg pubkey < private.key`; it may wrap */
 .tree .key { color: var(--dim); font-size: 0.85em; word-break: break-all; }
+/* a profile's [cli] commands: a line of their own inside the row, so the tree's lines run past them */
+.tree .branch > pre.cli { flex-basis: 100%; margin: 0.25rem 0 0.5rem; font-size: 0.85em; }
 #new-profile form { margin: 0; display: inline-flex; flex-wrap: wrap; gap: 0 1ch; align-items: baseline; }
 /* the form row's controls fit the tree's line height (border included), so it is as tall as any row */
 .tree .branch form label { display: inline-flex; gap: 0.5ch; }
