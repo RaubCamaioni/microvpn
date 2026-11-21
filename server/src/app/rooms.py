@@ -27,6 +27,12 @@ from app.wgconfig import PeerView, peers_hash, render_config
 
 logger = logging.getLogger("uvicorn.error")
 
+# A relay port a pair gave up stays retired until its room ends (see app.models.RetiredPort), so a room
+# whose members come and go keeps using up the range. Both caps keep one room to a small share of it:
+# a full room is 28 pairs, so it may retire that many ports, and hold twice that live and retired.
+MAX_RETIRED_PORTS_PER_ROOM = 28
+MAX_PORTS_PER_ROOM = 56
+
 
 class RoomError(Exception):
     status = 500
@@ -64,6 +70,10 @@ class TooManyRooms(RoomError):
 
 class ServerFull(RoomError):
     status, detail = 503, "no relay ports left; try later"
+
+
+class RoomSpent(RoomError):
+    status, detail = 409, "this room has used up its relay ports: end it and make a new room"
 
 
 class Unauthorized(RoomError):
@@ -166,8 +176,9 @@ class RoomService:
         self.relay = relay
         self.now = now
         self.locate = locate or (lambda ip: "")
-        # room creations per client address in the last hour; in memory, reset by a restart
+        # room creations, and joins, per client address in the last hour; in memory, reset by a restart
         self._creations: dict[str, deque[datetime]] = {}
+        self._joins: dict[str, deque[datetime]] = {}
         # joins are serialised: each one reads the room, binds ports, then writes in one transaction
         self._join_lock = asyncio.Lock()
 
@@ -180,24 +191,28 @@ class RoomService:
     def visitor_id_of(token: str) -> str:
         return hashlib.sha256(token.encode()).hexdigest()
 
-    def visitor(self, token: str | None, client_ip: str) -> tuple[str, str | None]:
+    def visitor(self, token: str | None, client_ip: str) -> str:
         """The visitor id for a cookie token, when the token is known and was issued to this address;
-        otherwise a fresh visitor. Returns (visitor id, new token to set or None)."""
+        otherwise "". Nothing is written for a browser that is not known: it gets its record, and its
+        cookie, when it first creates or joins a room."""
+        if not token:
+            return ""
         now = self.now()
         with self._session() as s:
-            if token:
-                row = s.get(Visitor, self.visitor_id_of(token))
-                if row is not None and row.ip == client_ip:
-                    if now - row.last_seen > timedelta(hours=1):
-                        row.last_seen = now
-                        s.add(row)
-                        s.commit()
-                    return row.id, None
-            new_token = keys.new_token()
-            row = Visitor(id=self.visitor_id_of(new_token), ip=client_ip, created_at=now, last_seen=now)
-            s.add(row)
-            s.commit()
-            return row.id, new_token
+            row = s.get(Visitor, self.visitor_id_of(token))
+            if row is None or row.ip != client_ip:
+                return ""
+            if now - row.last_seen > timedelta(hours=1):
+                row.last_seen = now
+                s.add(row)
+                s.commit()
+            return row.id
+
+    def _new_visitor(self, s: Session, token: str, client_ip: str, now: datetime) -> str:
+        """Record the browser that will hold `token` as its cookie (the caller commits); returns its id."""
+        row = Visitor(id=self.visitor_id_of(token), ip=client_ip, created_at=now, last_seen=now)
+        s.add(row)
+        return row.id
 
     def rooms_of_visitor(self, visitor_id: str) -> list[MyRoom]:
         """Live rooms this browser created or joined, newest first."""
@@ -230,7 +245,16 @@ class RoomService:
 
     # -- rooms --------------------------------------------------------------------------------
 
-    def create_room(self, name: str | None, lifetime_hours: int, client_ip: str, visitor_id: str = "") -> Room:
+    def create_room(
+        self,
+        name: str | None,
+        lifetime_hours: int,
+        client_ip: str,
+        visitor_id: str = "",
+        visitor_token: str | None = None,
+    ) -> Room:
+        """`visitor_id` is the creating browser when it is known; for one that is not, `visitor_token`
+        is the cookie it is about to get, and the browser is recorded with the room."""
         clean = keys.clean_room_name(name)
         if clean is None:
             raise Invalid(f"room name: up to {keys.ROOM_NAME_MAX} printable characters")
@@ -238,11 +262,13 @@ class RoomService:
             choices = ", ".join(str(h) for h in self.settings.ROOM_LIFETIMES)
             raise Invalid(f"lifetime must be one of {choices} hours")
         now = self.now()
-        self._check_creation_rate(client_ip, now)
+        self._check_rate(self._creations, client_ip, now, self.settings.ROOM_CREATE_PER_IP_PER_HOUR)
         with self._session() as s:
             live = s.exec(select(Room).where(Room.expires_at > now)).all()
             if len(live) >= self.settings.ROOM_MAX_LIVE:
                 raise TooManyRooms()
+            if not visitor_id and visitor_token:
+                visitor_id = self._new_visitor(s, visitor_token, client_ip, now)
             room = Room(
                 id=keys.new_room_id(),
                 name=clean,
@@ -258,12 +284,15 @@ class RoomService:
         self._creations.setdefault(client_ip, deque()).append(now)
         return room
 
-    def _check_creation_rate(self, client_ip: str, now: datetime) -> None:
-        window = self._creations.setdefault(client_ip, deque())
+    @staticmethod
+    def _check_rate(
+        seen: dict[str, deque[datetime]], client_ip: str, now: datetime, limit: int, detail: str | None = None
+    ) -> None:
+        window = seen.setdefault(client_ip, deque())
         while window and window[0] <= now - timedelta(hours=1):
             window.popleft()
-        if len(window) >= self.settings.ROOM_CREATE_PER_IP_PER_HOUR:
-            raise RateLimited()
+        if len(window) >= limit:
+            raise RateLimited(detail)
 
     @staticmethod
     def _free_subnet(used: set[str]) -> str:
@@ -401,10 +430,12 @@ class RoomService:
         owner_token: str | None = None,
         client_ip: str = "",
         visitor_id: str = "",
+        visitor_token: str | None = None,
     ) -> Member:
         """Add a device to the room. It waits for the admin unless the join comes from the admin (the
         owner token, or the creating browser's cookie), in which case it is accepted at once. The
-        address it joined from and its approximate location are kept for the admin's decision."""
+        address it joined from and its approximate location are kept for the admin's decision. A
+        browser that is not known yet (no `visitor_id`) is recorded under `visitor_token`, its new cookie."""
         clean = keys.clean_device_name(name)
         if clean is None:
             raise Invalid(f"device name: 1 to {keys.DEVICE_NAME_MAX} printable characters")
@@ -423,19 +454,27 @@ class RoomService:
                     raise RoomFull()
                 if any(m.public_key == public_key for m in members):
                     raise DuplicateKey()
+                now = self.now()
+                self._check_rate(
+                    self._joins, client_ip, now, self.settings.ROOM_JOIN_PER_IP_PER_HOUR,
+                    "too many devices joined from this address; try later",
+                )
+                if not visitor_id and visitor_token:
+                    visitor_id = self._new_visitor(s, visitor_token, client_ip, now)
                 member = Member(
                     room_id=room.id,
                     name=clean,
                     public_key=public_key,
                     address=self._free_address(room, members),
                     token=keys.new_token(),
-                    created_at=self.now(),
+                    created_at=now,
                     joined_ip=client_ip or "",
                     location=self.locate(client_ip) if client_ip else "",
                     visitor_id=visitor_id or "",
                 )
                 s.add(member)
                 s.commit()
+            self._joins[client_ip].append(now)
             if as_admin:
                 await self._connect_locked(room.id, member.id)
                 member.approved = True
@@ -454,10 +493,15 @@ class RoomService:
             others = [m for m in self._members(s, room) if m.approved and m.id != member.id]
             # ports in use anywhere, and ports retired by any live room: a removed device still points at those
             used_ports = set(s.exec(select(Pair.port)).all()) | set(s.exec(select(RetiredPort.port)).all())
+            retired = len(s.exec(select(RetiredPort.port).where(RetiredPort.room_id == room.id)).all())
+            held = retired + len(s.exec(select(Pair.port).where(Pair.room_id == room.id)).all())
+        if retired >= MAX_RETIRED_PORTS_PER_ROOM:
+            raise RoomSpent()
         opened: list[tuple[int, int]] = []  # (other member id, port)
         try:
             for other in others:
-                port = await self._open_free_port(room.id, used_ports, (member.public_key, other.public_key))
+                pair_keys = (member.public_key, other.public_key)
+                port = await self._open_free_port(room.id, used_ports, pair_keys, held + len(opened))
                 opened.append((other.id, port))
                 used_ports.add(port)
             with self._session() as s:
@@ -475,7 +519,10 @@ class RoomService:
                 self.relay.close(port)
             raise
 
-    async def _open_free_port(self, room_id: str, used: set[int], pair_keys: tuple[str, str]) -> int:
+    async def _open_free_port(self, room_id: str, used: set[int], pair_keys: tuple[str, str], held: int = 0) -> int:
+        """Bind a port nobody uses or has retired; `held` is how many the room has already, live and retired."""
+        if held >= MAX_PORTS_PER_ROOM:
+            raise RoomSpent()
         lo, hi = self.settings.RELAY_PORT_RANGE
         free = set(range(lo, hi + 1)) - used
         while free:
