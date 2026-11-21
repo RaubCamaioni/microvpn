@@ -20,6 +20,7 @@ class Settings:
     ROOM_MAX_MEMBERS: int = 8
     ROOM_MAX_LIVE: int = 64
     ROOM_CREATE_PER_IP_PER_HOUR: int = 3
+    ROOM_JOIN_PER_IP_PER_HOUR: int = 60
     ROOM_MBPS: float = 50.0
     RELAY_TOTAL_MBPS: float = 200.0
     ROOM_LIFETIMES: tuple[int, ...] = (1, 4, 12, 24)
@@ -55,7 +56,7 @@ class Settings:
             take(name, str)
         take("HTTP_BIND", _parse_bind)
         take("RELAY_PORT_RANGE", _parse_port_range)
-        for name in ("ROOM_MAX_MEMBERS", "ROOM_MAX_LIVE", "ROOM_CREATE_PER_IP_PER_HOUR"):
+        for name in ("ROOM_MAX_MEMBERS", "ROOM_MAX_LIVE", "ROOM_CREATE_PER_IP_PER_HOUR", "ROOM_JOIN_PER_IP_PER_HOUR"):
             take(name, _parse_positive_int)
         for name in ("ROOM_MBPS", "RELAY_TOTAL_MBPS", "SWEEP_SECONDS"):
             take(name, _parse_positive_float)

@@ -27,6 +27,12 @@ from app.wgconfig import PeerView, peers_hash, render_config
 
 logger = logging.getLogger("uvicorn.error")
 
+# A relay port a pair gave up stays retired until its room ends (see app.models.RetiredPort), so a room
+# whose members come and go keeps using up the range. Both caps keep one room to a small share of it:
+# a full room is 28 pairs, so it may retire that many ports, and hold twice that live and retired.
+MAX_RETIRED_PORTS_PER_ROOM = 28
+MAX_PORTS_PER_ROOM = 56
+
 
 class RoomError(Exception):
     status = 500
@@ -64,6 +70,10 @@ class TooManyRooms(RoomError):
 
 class ServerFull(RoomError):
     status, detail = 503, "no relay ports left; try later"
+
+
+class RoomSpent(RoomError):
+    status, detail = 409, "this room has used up its relay ports: end it and make a new room"
 
 
 class Unauthorized(RoomError):
@@ -166,8 +176,9 @@ class RoomService:
         self.relay = relay
         self.now = now
         self.locate = locate or (lambda ip: "")
-        # room creations per client address in the last hour; in memory, reset by a restart
+        # room creations, and joins, per client address in the last hour; in memory, reset by a restart
         self._creations: dict[str, deque[datetime]] = {}
+        self._joins: dict[str, deque[datetime]] = {}
         # joins are serialised: each one reads the room, binds ports, then writes in one transaction
         self._join_lock = asyncio.Lock()
 
@@ -238,7 +249,7 @@ class RoomService:
             choices = ", ".join(str(h) for h in self.settings.ROOM_LIFETIMES)
             raise Invalid(f"lifetime must be one of {choices} hours")
         now = self.now()
-        self._check_creation_rate(client_ip, now)
+        self._check_rate(self._creations, client_ip, now, self.settings.ROOM_CREATE_PER_IP_PER_HOUR)
         with self._session() as s:
             live = s.exec(select(Room).where(Room.expires_at > now)).all()
             if len(live) >= self.settings.ROOM_MAX_LIVE:
@@ -258,12 +269,15 @@ class RoomService:
         self._creations.setdefault(client_ip, deque()).append(now)
         return room
 
-    def _check_creation_rate(self, client_ip: str, now: datetime) -> None:
-        window = self._creations.setdefault(client_ip, deque())
+    @staticmethod
+    def _check_rate(
+        seen: dict[str, deque[datetime]], client_ip: str, now: datetime, limit: int, detail: str | None = None
+    ) -> None:
+        window = seen.setdefault(client_ip, deque())
         while window and window[0] <= now - timedelta(hours=1):
             window.popleft()
-        if len(window) >= self.settings.ROOM_CREATE_PER_IP_PER_HOUR:
-            raise RateLimited()
+        if len(window) >= limit:
+            raise RateLimited(detail)
 
     @staticmethod
     def _free_subnet(used: set[str]) -> str:
@@ -423,19 +437,25 @@ class RoomService:
                     raise RoomFull()
                 if any(m.public_key == public_key for m in members):
                     raise DuplicateKey()
+                now = self.now()
+                self._check_rate(
+                    self._joins, client_ip, now, self.settings.ROOM_JOIN_PER_IP_PER_HOUR,
+                    "too many devices joined from this address; try later",
+                )
                 member = Member(
                     room_id=room.id,
                     name=clean,
                     public_key=public_key,
                     address=self._free_address(room, members),
                     token=keys.new_token(),
-                    created_at=self.now(),
+                    created_at=now,
                     joined_ip=client_ip or "",
                     location=self.locate(client_ip) if client_ip else "",
                     visitor_id=visitor_id or "",
                 )
                 s.add(member)
                 s.commit()
+            self._joins[client_ip].append(now)
             if as_admin:
                 await self._connect_locked(room.id, member.id)
                 member.approved = True
@@ -454,10 +474,15 @@ class RoomService:
             others = [m for m in self._members(s, room) if m.approved and m.id != member.id]
             # ports in use anywhere, and ports retired by any live room: a removed device still points at those
             used_ports = set(s.exec(select(Pair.port)).all()) | set(s.exec(select(RetiredPort.port)).all())
+            retired = len(s.exec(select(RetiredPort.port).where(RetiredPort.room_id == room.id)).all())
+            held = retired + len(s.exec(select(Pair.port).where(Pair.room_id == room.id)).all())
+        if retired >= MAX_RETIRED_PORTS_PER_ROOM:
+            raise RoomSpent()
         opened: list[tuple[int, int]] = []  # (other member id, port)
         try:
             for other in others:
-                port = await self._open_free_port(room.id, used_ports, (member.public_key, other.public_key))
+                pair_keys = (member.public_key, other.public_key)
+                port = await self._open_free_port(room.id, used_ports, pair_keys, held + len(opened))
                 opened.append((other.id, port))
                 used_ports.add(port)
             with self._session() as s:
@@ -475,7 +500,10 @@ class RoomService:
                 self.relay.close(port)
             raise
 
-    async def _open_free_port(self, room_id: str, used: set[int], pair_keys: tuple[str, str]) -> int:
+    async def _open_free_port(self, room_id: str, used: set[int], pair_keys: tuple[str, str], held: int = 0) -> int:
+        """Bind a port nobody uses or has retired; `held` is how many the room has already, live and retired."""
+        if held >= MAX_PORTS_PER_ROOM:
+            raise RoomSpent()
         lo, hi = self.settings.RELAY_PORT_RANGE
         free = set(range(lo, hi + 1)) - used
         while free:
