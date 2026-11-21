@@ -49,10 +49,15 @@ member sends from, packet sizes and timing. This is stated on the room page.
 | `ROOM_MAX_MEMBERS` | 8 | members per room (28 relay ports when full) |
 | `ROOM_MAX_LIVE` | 64 | live rooms at once |
 | `ROOM_CREATE_PER_IP_PER_HOUR` | 3 | room creations per client address |
+| `ROOM_JOIN_PER_IP_PER_HOUR` | 60 | devices joining, in any room, per client address |
 | `ROOM_MBPS` | 50 | relay bandwidth per room, shared by all of its pairs |
 | `RELAY_TOTAL_MBPS` | 200 | relay bandwidth for the whole server |
 | `ROOM_LIFETIMES` | `1,4,12,24` | lifetime choices, hours |
 | `RELAY_PORT_RANGE` | `20000-21999` | UDP ports for pair relays |
+
+A port a pair gave up is not used again while its room lives, because the device that left still
+points at it. A room that has given up 28 ports accepts no more devices, and no room holds more than
+56 ports, in use and given up together: end it and make a new room (`server/src/app/rooms.py`).
 
 Other settings: `DATABASE` (SQLite path, required), `ROOT_PATH` (URL prefix behind the proxy),
 `PUBLIC_URL`, `RELAY_HOST` (the host in configs' `Endpoint` lines), `RELAY_BIND`, `HTTP_BIND`,

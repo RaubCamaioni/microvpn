@@ -3,8 +3,10 @@ import base64
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlmodel import Session, select
 
-from app.models import create_db_and_tables, make_engine
+from app import rooms as rooms_module
+from app.models import Pair, RetiredPort, create_db_and_tables, make_engine
 from app.rooms import (
     CannotKick,
     DuplicateKey,
@@ -14,6 +16,7 @@ from app.rooms import (
     RoomFull,
     RoomGone,
     RoomService,
+    RoomSpent,
     ServerFull,
     TooManyRooms,
     Unauthorized,
@@ -369,3 +372,78 @@ async def test_released_ports_are_retired_until_the_room_ends(tmp_path, clock):
     await s2.join(r2.id, "p", KEY(7), owner_token=r2.owner_token)
     await s2.join(r2.id, "q", KEY(8), owner_token=r2.owner_token)
     assert len([p for p, room in s2.relay.opened.items() if room == r2.id]) == 1
+
+
+def ports_held(s, room_id):
+    """(live, retired) relay ports of a room."""
+    with Session(s.engine) as db:
+        live = db.exec(select(Pair).where(Pair.room_id == room_id)).all()
+        retired = db.exec(select(RetiredPort).where(RetiredPort.room_id == room_id)).all()
+    return len(live), len(retired)
+
+
+async def join_and_leave(s, r, rounds):
+    """The admin's own devices fill the room, then one more joins and leaves `rounds` times;
+    returns the errors the joins got."""
+    for i in range(s.settings.ROOM_MAX_MEMBERS - 1):
+        await s.join(r.id, f"d{i}", KEY(i + 1), owner_token=r.owner_token)
+    errors = []
+    for i in range(rounds):
+        try:
+            m = await s.join(r.id, "x", KEY(100 + i % 100), owner_token=r.owner_token)
+        except (RoomSpent, RoomFull, ServerFull) as e:
+            errors.append(e)
+        else:
+            s.leave(r.id, m.token)
+    return errors
+
+
+async def test_a_room_that_retired_too_many_ports_accepts_nobody_and_other_rooms_still_do(tmp_path, clock):
+    s = service(tmp_path, clock, "spent.db", RELAY_PORT_RANGE="30000-30999")
+    r = s.create_room("", 1, "ip")
+    errors = await join_and_leave(s, r, 300)
+    assert isinstance(errors[0], RoomSpent) and "new room" in errors[0].detail and errors[0].status == 409
+    assert not any(isinstance(e, ServerFull) for e in errors)
+    live, retired = ports_held(s, r.id)
+    assert retired == rooms_module.MAX_RETIRED_PORTS_PER_ROOM  # four rounds of seven, then no more accepts
+    assert live + retired <= rooms_module.MAX_PORTS_PER_ROOM
+    assert names(s, r.id) == [f"d{i}" for i in range(7)]  # the members it has stay connected
+    with pytest.raises(RoomSpent):  # the admin accepting a waiting device is refused the same way
+        await s.approve(r.id, r.owner_token, [m.id for m in s.room_view(r.id).members if not m.approved][0])
+    r2 = s.create_room("", 1, "ip")
+    await s.join(r2.id, "p", KEY(1), owner_token=r2.owner_token)
+    q = await s.join(r2.id, "q", KEY(2), owner_token=r2.owner_token)
+    assert q.approved and ports_held(s, r2.id) == (1, 0)
+    # retired ports are still never handed out again while their room lives
+    with Session(s.engine) as db:
+        retired_ports = set(db.exec(select(RetiredPort.port)).all())
+    assert len(retired_ports) == retired and not (retired_ports & set(s.relay.opened))
+
+
+async def test_a_room_never_holds_more_than_its_share_of_the_port_range(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(rooms_module, "MAX_RETIRED_PORTS_PER_ROOM", 10_000)  # leave only the total cap
+    s = service(tmp_path, clock, "share.db", RELAY_PORT_RANGE="30000-30999")
+    r = s.create_room("", 1, "ip")
+    errors = await join_and_leave(s, r, 300)
+    assert isinstance(errors[0], RoomSpent)
+    live, retired = ports_held(s, r.id)
+    assert live + retired == rooms_module.MAX_PORTS_PER_ROOM
+    assert len(s.relay.opened) == live  # the ports the refused device briefly took were given back
+
+
+async def test_joins_are_limited_per_address(tmp_path, clock):
+    s = service(tmp_path, clock, "joins.db", ROOM_JOIN_PER_IP_PER_HOUR="3")
+    r = s.create_room("", 1, "ip")
+    for i in range(3):
+        m = await s.join(r.id, f"d{i}", KEY(i + 1), client_ip="1.1.1.1")
+        s.leave(r.id, m.token)
+    with pytest.raises(RateLimited) as e:
+        await s.join(r.id, "d3", KEY(4), client_ip="1.1.1.1")
+    assert "joined" in e.value.detail
+    with pytest.raises(RoomGone):  # a join that fails is not counted
+        await s.join("nope", "d", KEY(5), client_ip="2.2.2.2")
+    await s.join(r.id, "other", KEY(5), client_ip="2.2.2.2")  # another address is not affected
+    clock.t += timedelta(minutes=59)
+    r = s.create_room("", 4, "ip")
+    clock.t += timedelta(minutes=2)
+    await s.join(r.id, "d3", KEY(4), client_ip="1.1.1.1")  # the window slid
