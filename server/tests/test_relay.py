@@ -55,7 +55,7 @@ import base64  # noqa: E402
 import hashlib  # noqa: E402
 import socket  # noqa: E402
 
-from app.relay import Relay, mac1_valid  # noqa: E402
+from app.relay import MemberStats, Relay, mac1_valid  # noqa: E402
 from app.settings import Settings  # noqa: E402
 
 KA = base64.b64encode(bytes([1] * 32)).decode()
@@ -204,19 +204,21 @@ async def test_member_stats_attribute_traffic_to_the_member_that_sent_it():
     t = [100.0]
     relay = Relay(relay_settings(), clock=lambda: t[0])
     await relay.open(30010, "room", (KA, KB))
-    assert relay.member_stats(30010) == {KA: (False, 0), KB: (False, 0)}
+    idle = MemberStats(active=False, seen=False, bytes=0)
+    assert relay.member_stats(30010) == {KA: idle, KB: idle}
     a, b = udp_client(), udp_client()
     a.sendto(handshake(1, KB), ("127.0.0.1", 30010))  # mac1 for B's key: the sender is A
     await asyncio.sleep(0.05)
-    assert relay.member_stats(30010) == {KA: (True, 148), KB: (False, 0)}
+    # a handshake alone is "seen", not "active": only transport data proves the handshake completed
+    assert relay.member_stats(30010) == {KA: MemberStats(False, True, 148), KB: idle}
     b.sendto(handshake(2, KA), ("127.0.0.1", 30010))  # mac1 for A's key: the sender is B
     await recv(a)
     a.sendto(make_packet(4, 200), ("127.0.0.1", 30010))
     await recv(b)
     stats = relay.member_stats(30010)
-    assert stats[KA] == (True, 348) and stats[KB] == (True, 92)
+    assert stats[KA] == MemberStats(True, True, 348) and stats[KB] == MemberStats(False, True, 92)
     t[0] = 150.0  # 50 s later nobody has sent: both idle, the counts stay
-    assert relay.member_stats(30010, window=40.0) == {KA: (False, 348), KB: (False, 92)}
+    assert relay.member_stats(30010, window=40.0) == {KA: MemberStats(False, False, 348), KB: MemberStats(False, False, 92)}
     assert relay.member_stats(30099) == {}
     relay.close(30010)
 

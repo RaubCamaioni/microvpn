@@ -156,6 +156,7 @@
       } else {
         var peers = view.peers.length + " peer" + (view.peers.length === 1 ? "" : "s");
         row.appendChild(span("· " + p.address + " · " + peers + (p.privateKey ? "" : " · key kept elsewhere"), "dim"));
+        row.appendChild(span(p.publicKey, "key"));
         var note = staleNote(p, view);
         if (note) row.appendChild(span(note, "stale"));
         row.appendChild(link("[download]", function () { downloadProfile(p); }, "the .conf file for the WireGuard app"));
@@ -190,11 +191,14 @@
         if (accepted.length < 2) {
           text.appendChild(span("waiting for a peer", "dim"));
         } else {
-          text.appendChild(span(m.active ? "Connected" : "Disconnected", m.active ? "ok" : "bad"));
+          // handshaking: it reaches the relay but no handshake completes, so its private key does not match this public key
+          var state = m.active ? ["Connected", "ok"] : m.handshaking ? ["Handshaking…", "warn"] : ["Disconnected", "bad"];
+          text.appendChild(span(state[0], state[1]));
           text.appendChild(span(" · " + formatBytes(m.bytes), "dim"));
         }
       }
       row.appendChild(text);
+      row.appendChild(span(m.public_key, "key"));
       el["peer-list"].appendChild(row);
     });
   }
