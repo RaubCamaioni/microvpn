@@ -1,4 +1,5 @@
-"""The three tables: a room, its members, and the member pairs with their relay ports.
+"""The tables: a room, its members, the member pairs with their relay ports, and the accounts people
+sign in to with their sessions.
 
 Datetimes are timezone-aware UTC throughout (SQLModel >= 0.0.48 stores them with their offset and
 rejects naive values); use utcnow().
@@ -12,6 +13,29 @@ from sqlmodel import Field, SQLModel, create_engine
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# what a room with no expiry carries as its expiry, so "still live" is one comparison for every room
+PERMANENT_EXPIRES = datetime(9999, 12, 31, tzinfo=timezone.utc)
+
+
+class Account(SQLModel, table=True):
+    """A person signed in through GitHub. Nothing of theirs is kept but the id and the login."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    github_id: int = Field(unique=True, index=True)  # GitHub's numeric id: it survives a rename
+    login: str
+    created_at: datetime
+    last_login: datetime
+
+
+class AccountSession(SQLModel, table=True):
+    """A signed-in browser. Unlike a visitor it is not tied to an address: a phone changes networks."""
+
+    id: str = Field(primary_key=True)  # sha256 of the cookie token
+    account_id: int = Field(index=True)
+    created_at: datetime
+    last_seen: datetime
 
 
 class Visitor(SQLModel, table=True):
@@ -34,6 +58,10 @@ class Room(SQLModel, table=True):
     visitor_id: str = Field(default="", index=True)
     # the lifetime chosen at creation (hours); [extend] starts it again from now
     lifetime_hours: int = 1
+    # the account that created the room, when it was signed in: its admin from any browser
+    account_id: int | None = Field(default=None, index=True)
+    # no expiry: expires_at is PERMANENT_EXPIRES and the room lives until its admin ends it
+    permanent: bool = False
 
 
 class Member(SQLModel, table=True):
@@ -87,6 +115,8 @@ _ADDED_COLUMNS = {
     "room": [
         ("visitor_id", "VARCHAR NOT NULL DEFAULT ''"),
         ("lifetime_hours", "INTEGER NOT NULL DEFAULT 1"),
+        ("account_id", "INTEGER"),
+        ("permanent", "BOOLEAN NOT NULL DEFAULT 0"),
     ],
     "member": [
         ("approved", "BOOLEAN NOT NULL DEFAULT 0"),
