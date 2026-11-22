@@ -55,7 +55,8 @@ redirects to GitHub; `GET /auth/github/callback` checks the state, exchanges the
 unset the routes answer 404 and the pages show no login: the app runs as today.
 
 **Sessions.** Table `accountsession`: sha256 of a random token, account id, created, last seen. Cookie
-`microvpn_session`: HttpOnly, SameSite=Lax, Secure on https, 30 days, scoped to `ROOT_PATH`. Unlike
+`microvpn_session`: HttpOnly, SameSite=Lax, Secure on https, 30 days from the last use (the cookie is
+issued again when the session is renewed, at most hourly), scoped to `ROOT_PATH`. Unlike
 the visitor cookie it is not tied to an address, since a phone changes networks. Sessions unused for
 30 days are swept.
 
@@ -69,9 +70,18 @@ when not entitled, 409 over `PERMANENT_ROOMS_PER_ACCOUNT` (default 3). Any room 
 in records `account_id`. `extend` on a permanent room is refused; ending it works as for any room.
 Permanent rooms count toward `ROOM_MAX_LIVE` and keep the per-room member and port limits.
 
-**Admin of a room.** As today (owner token, or the creating browser's cookie), or the signed-in
-account that owns the room. A join from the owning account is accepted at once, like the creator's
-own device today.
+**Admin of a room.** A room made while signed in has one admin: the account, from any browser. Its
+owner token opens nothing and the browser it was made in keeps no claim on it, so signing out of a
+browser lets go of the room (changed after the branch review, 2026-11-21: the first design also
+accepted the token and the cookie, which left a signed-out browser in control of a room that never
+ends). Any other room is as today: the owner token, or the creating browser's cookie. A join from the
+owning account is accepted at once, like the creator's own device today.
+
+**Requests from elsewhere** (added after the branch review). Anything but a read is refused with 403
+when the browser's `Sec-Fetch-Site` header says it comes from another site or from another name under
+the same domain: the domain also serves other people's VMs at `vm<id>.` names, and cookies name the
+admin. Other apps served from the same origin (`/tools/`, `/blog/`) are not kept out by this or by the
+cookie's path; that is inherent to sharing an origin.
 
 **Pages.** The top bar shows `[sign in with GitHub]`, or the login and `[sign out]`. The front page
 lists the account's rooms beside the browser's own, and offers "no expiry" in the lifetime choices

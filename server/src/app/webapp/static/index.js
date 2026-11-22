@@ -31,7 +31,10 @@
       error.hidden = false;
       return;
     }
-    try { localStorage.setItem("microvpn:" + json.id + ":owner", json.owner_token); } catch (e) { /* private mode */ }
+    // a room made while signed in has no owner token: the account is its admin
+    if (json.owner_token) {
+      try { localStorage.setItem("microvpn:" + json.id + ":owner", json.owner_token); } catch (e) { /* private mode */ }
+    }
     location.reload();  // the room appears in the tree; the reader opens it when ready
   });
 

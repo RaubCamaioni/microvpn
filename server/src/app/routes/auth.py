@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from app import keys
-from app.accounts import SESSION_COOKIE, SESSION_DAYS, session_token
+from app.accounts import SESSION_COOKIE, session_cookie, session_token
 from app.github import GitHubError, authorize_url
 
 router = APIRouter()
@@ -66,7 +66,7 @@ async def callback(request: Request, code: str = "", state: str = ""):
     _, token = request.app.state.accounts.sign_in(github_id, login)
     response = _front_page(request)
     response.delete_cookie(STATE_COOKIE, **args)
-    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, **args)
+    response.headers.append("set-cookie", session_cookie(request.app.state.settings, token))
     return response
 
 

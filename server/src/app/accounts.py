@@ -53,18 +53,24 @@ class AccountService:
     def account_of(self, token: str | None) -> Account | None:
         """The account behind a session cookie; None when the token is unknown or the session has not
         been used for SESSION_DAYS."""
+        return self.lookup(token)[0]
+
+    def lookup(self, token: str | None) -> tuple[Account | None, bool]:
+        """`account_of`, and whether this use renewed the session (at most hourly): the browser's cookie
+        is then issued again, so both ends count SESSION_DAYS from the last use."""
         if not token:
-            return None
+            return None, False
         now = self.now()
         with self._session() as s:
             row = s.get(AccountSession, self._session_id(token))
             if row is None or now - row.last_seen > timedelta(days=SESSION_DAYS):
-                return None
-            if now - row.last_seen > timedelta(hours=1):
+                return None, False
+            renewed = now - row.last_seen > timedelta(hours=1)
+            if renewed:
                 row.last_seen = now
                 s.add(row)
                 s.commit()
-            return s.get(Account, row.account_id)
+            return s.get(Account, row.account_id), renewed
 
     def sign_out(self, token: str | None) -> None:
         """End this browser's session; the account's other sessions stay."""
@@ -102,5 +108,18 @@ def current_account(request) -> Account | None:
     """The signed-in account of a request, looked up once and kept on `request.state`."""
     if not hasattr(request.state, "account"):
         accounts = getattr(request.app.state, "accounts", None)
-        request.state.account = accounts.account_of(session_token(request)) if accounts is not None else None
+        token = session_token(request)
+        account, renewed = accounts.lookup(token) if accounts is not None else (None, False)
+        request.state.account = account
+        if account is not None and renewed:
+            request.state.session_refresh = token  # SessionCookieMiddleware issues the cookie again
     return request.state.account
+
+
+def session_cookie(settings: Settings, token: str) -> str:
+    """The Set-Cookie value of a session: scoped to the app's path, unreadable by scripts, SESSION_DAYS long."""
+    secure = "; Secure" if settings.PUBLIC_URL.lower().startswith("https://") else ""
+    return (
+        f"{SESSION_COOKIE}={token}; Path={settings.ROOT_PATH or '/'}; Max-Age={SESSION_DAYS * 86400}"
+        f"; HttpOnly; SameSite=Lax{secure}"
+    )

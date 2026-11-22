@@ -56,7 +56,12 @@ without an expiry.
   anonymous browser cookie it is not tied to an address, so a phone stays signed in as it moves.
 - **A room made while signed in belongs to the account.** Signed in on any browser, the account is
   the room's admin: it accepts devices, ends the room, and its own devices are accepted at once.
-  The front page lists the account's rooms beside the browser's own.
+  The front page lists the account's rooms beside the browser's own. The account is that room's
+  only admin: it has no owner token, and the browser it was made in keeps no claim on it, so
+  signing out of a browser lets go of the room.
+- **Only this site's own pages act for you.** Anything but a read is refused when the browser says
+  the request comes from another site, or from another name under the same domain. Apps served from
+  the same origin as this one are not kept apart from it by a browser; host it with apps you trust.
 - **No expiry.** An account that may hold permanent rooms sees "no expiry" among the lifetimes.
   Such a room lives until its admin ends it, is never extended, and survives a restart of the
   server with its relay ports. The other rules are unchanged: 8 members, an accepted member is not

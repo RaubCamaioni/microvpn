@@ -29,13 +29,14 @@ def authorize_url(settings: Settings, state: str) -> str:
 
 
 class HttpGitHub:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
         self.settings = settings
+        self.transport = transport  # tests answer for GitHub through this
 
     async def identity(self, code: str) -> tuple[int, str]:
         """Exchange a callback's code for who signed in: (numeric id, login)."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as http:
+            async with httpx.AsyncClient(timeout=10.0, transport=self.transport) as http:
                 answer = await http.post(
                     TOKEN_URL,
                     headers={"Accept": "application/json"},

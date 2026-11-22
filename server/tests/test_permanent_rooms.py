@@ -143,3 +143,23 @@ def test_dropped_admin_keeps_and_can_end_its_rooms(svc, clock):  # noqa: F811
     assert later.room_view(room.id).permanent and later.is_admin(room.id, "", account_id=1)
     later.end_room(room.id, None, account_id=1)
     assert later.counts()["rooms"] == 0
+
+
+def test_an_account_room_has_no_other_admin(svc):
+    """Made while signed in, a room is administered by the account and nothing else: not the owner
+    token, not the cookie of the browser it was made in. Signing out of that browser lets go of it."""
+    token = "t" * 22
+    room = svc.create_room("lab", None, "1.1.1.1", visitor_token=token, account=ADMIN, permanent=True)
+    browser = svc.visitor(token, "1.1.1.1")
+    assert browser  # the browser is still recorded, for its own anonymous rooms
+    assert not svc.is_admin(room.id, browser)
+    with pytest.raises(Unauthorized):
+        svc.admin_view(room.id, room.owner_token)
+    with pytest.raises(Unauthorized):
+        svc.end_room(room.id, room.owner_token, visitor_id=browser)
+    assert svc.rooms_of_visitor(browser) == []
+    svc.end_room(room.id, room.owner_token, visitor_id=browser, account_id=1)
+    # an anonymous room keeps both of its admins
+    anonymous = svc.create_room("", 1, "1.1.1.1", visitor_id=browser)
+    assert svc.is_admin(anonymous.id, browser)
+    svc.admin_view(anonymous.id, anonymous.owner_token)

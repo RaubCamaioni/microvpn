@@ -97,7 +97,8 @@ def create_room(body: CreateRoom, request: Request):
     return {
         "id": room.id,
         "url": f"{public_url}/r/{room.id}",
-        "owner_token": room.owner_token,
+        # an account's room is administered by signing in, never by a token a browser would keep
+        "owner_token": "" if room.account_id is not None else room.owner_token,
         "expires_at": room.expires_at.isoformat(),
         "permanent": room.permanent,
     }

@@ -319,7 +319,9 @@ class RoomService:
                 created_at=now,
                 expires_at=PERMANENT_EXPIRES if permanent else now + timedelta(hours=lifetime_hours),
                 owner_token=keys.new_token(),
-                visitor_id=visitor_id or "",
+                # a room made while signed in is the account's alone: the browser keeps no claim on it,
+                # so signing out of that browser lets go of the room
+                visitor_id="" if account is not None else visitor_id or "",
                 lifetime_hours=0 if permanent else lifetime_hours,
                 account_id=account.id if account is not None else None,
                 permanent=permanent,
@@ -678,12 +680,14 @@ class RoomService:
 
     @staticmethod
     def _is_admin_of(room: Room, owner_token: str | None, visitor_id: str, account_id: int | None) -> bool:
-        """A room's admin is whoever holds its owner token, the browser that created it (by its cookie),
-        or the signed-in account it was created under, from any browser."""
+        """A room made while signed in has one admin, the account it belongs to, from any browser: its
+        owner token opens nothing, so nothing a browser keeps outlasts a sign-out. Any other room's admin
+        is whoever holds its owner token, or the browser that created it (by its cookie)."""
+        if room.account_id is not None:
+            return account_id is not None and room.account_id == account_id
         by_token = owner_token is not None and hmac.compare_digest(room.owner_token.encode(), owner_token.encode())
         by_cookie = bool(visitor_id) and bool(room.visitor_id) and room.visitor_id == visitor_id
-        by_account = account_id is not None and room.account_id is not None and room.account_id == account_id
-        return by_token or by_cookie or by_account
+        return by_token or by_cookie
 
     @staticmethod
     def _members(s: Session, room: Room) -> list[Member]:
