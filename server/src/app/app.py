@@ -10,11 +10,13 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers, MutableHeaders
 
+from app.accounts import AccountService
 from app.geo import Geo
+from app.github import HttpGitHub
 from app.models import create_db_and_tables, make_engine
 from app.relay import Relay
 from app.rooms import VISITOR_COOKIE_DAYS, RoomError, RoomService
-from app.routes import api, pages
+from app.routes import api, auth, pages
 from app.settings import Settings
 from app.templating import WEBAPP
 
@@ -86,11 +88,12 @@ class NoStoreMiddleware:
         await self.app(scope, receive, send_no_store)
 
 
-def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
+def create_app(settings: Settings, relay=None, locate=None, github=None) -> FastAPI:
     engine = make_engine(settings.DATABASE)
     relay = relay if relay is not None else Relay(settings)
     locate = locate if locate is not None else Geo(settings.GEOIP_DB).locate
     rooms = RoomService(engine, settings, relay, locate=locate)
+    accounts = AccountService(engine, settings)
 
     async def sweeper(app: FastAPI):
         """Every SWEEP_SECONDS: end the rooms whose time is up. An error is logged, never fatal."""
@@ -98,6 +101,7 @@ def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
             await asyncio.sleep(settings.SWEEP_SECONDS)
             try:
                 removed = await asyncio.to_thread(rooms.sweep)
+                await asyncio.to_thread(accounts.sweep)
                 if removed:
                     logger.info("sweep: ended %d expired room(s)", removed)
             except Exception:  # noqa: BLE001 - the sweeper must survive anything
@@ -123,6 +127,8 @@ def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
     app.state.relay = relay
     app.state.engine = engine
     app.state.rooms = rooms
+    app.state.accounts = accounts
+    app.state.github = github if github is not None else HttpGitHub(settings)
 
     @app.exception_handler(RoomError)
     async def room_error(request: Request, exc: RoomError):
@@ -132,5 +138,7 @@ def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
     app.add_middleware(VisitorMiddleware, rooms=rooms, settings=settings)
     app.mount("/static", StaticFiles(directory=WEBAPP / "static"), name="static")
     app.include_router(api.router)
+    if settings.github_enabled:  # without the OAuth app there is no login: these paths answer 404
+        app.include_router(auth.router)
     app.include_router(pages.router)
     return app

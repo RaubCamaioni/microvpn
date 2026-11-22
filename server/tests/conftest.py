@@ -88,3 +88,54 @@ def client(app):
     # the context manager runs the lifespan (tables, restore, sweeper)
     with TestClient(app) as c:
         yield c
+
+
+class FakeGitHub:
+    """Stands in for app.github.HttpGitHub: `identities[code]` is who that code signs in as."""
+
+    def __init__(self):
+        self.identities: dict[str, tuple[int, str]] = {}
+
+    async def identity(self, code: str) -> tuple[int, str]:
+        from app.github import GitHubError
+
+        if code not in self.identities:
+            raise GitHubError("bad code")
+        return self.identities[code]
+
+
+@pytest.fixture
+def auth_settings(tmp_path):
+    """Login configured; GitHub account 7 is the admin."""
+    return make_settings(
+        DATABASE=str(tmp_path / "auth.db"), GITHUB_CLIENT_ID="cid", GITHUB_CLIENT_SECRET="csecret", ADMIN_GITHUB_IDS="7"
+    )
+
+
+@pytest.fixture
+def auth_app(auth_settings):
+    return create_app(auth_settings, relay=FakeRelay(), locate=fake_locate, github=FakeGitHub())
+
+
+@pytest.fixture
+def auth_client(auth_app):
+    with TestClient(auth_app) as c:
+        yield c
+
+
+def oauth_state(client) -> str:
+    """Start a sign-in and return the state GitHub would hand back."""
+    from urllib.parse import parse_qs, urlparse
+
+    r = client.get("/auth/github", follow_redirects=False)
+    assert r.status_code == 302
+    return parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+
+
+def sign_in(client, github_id: int, login: str) -> None:
+    """Walk both sign-in routes as that GitHub account; the client keeps the session cookie."""
+    state = oauth_state(client)
+    code = f"code-{github_id}"
+    client.app.state.github.identities[code] = (github_id, login)
+    r = client.get(f"/auth/github/callback?code={code}&state={state}", follow_redirects=False)
+    assert r.status_code == 302, r.text
