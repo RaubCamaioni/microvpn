@@ -4,6 +4,8 @@ Temporary WireGuard rooms. Create a room, share its link, and everyone who opens
 WireGuard configuration for their device: a `.conf` download, a QR code for the phone apps, or an
 Apple configuration profile. Members then reach each other over a private
 virtual LAN. Nothing is routed to the internet, nobody opens a port, and the room ends on its own.
+Someone signed in with GitHub, whose account is allowed to, can instead make a room with no
+expiry (see "Accounts and permanent rooms").
 
 The public instance runs at **https://raubcamaioni.com/microvpn/**.
 
@@ -37,10 +39,42 @@ behind it are in `docs/superpowers/specs/2026-10-22-microvpn-design.md`.
    carries only ciphertext. Per pair ports are the reason: WireGuard packets do not say who sent
    them, so the port is the only thing that can mean "the alice-bob conversation".
 5. **End.** When the lifetime passes, or the creator ends the room, the ports close and every row
-   of the room is deleted.
+   of the room is deleted. A room with no expiry ends only when its admin ends it.
 
 What the server sees: room and device names, public keys, the public IP address and port each
 member sends from, packet sizes and timing. This is stated on the room page.
+
+## Accounts and permanent rooms
+
+Signing in is optional and changes nothing about how a room works. It exists so that a room can
+belong to a person instead of to one browser's cookie, and so that a room can be allowed to live
+without an expiry.
+
+- **Signing in** is GitHub's OAuth web flow with no scopes. The server keeps the account's numeric
+  GitHub id and its login, nothing else, and does not keep GitHub's token. A signed-in browser holds
+  a session cookie (30 days from its last use; the server stores only its hash). Unlike the
+  anonymous browser cookie it is not tied to an address, so a phone stays signed in as it moves.
+- **A room made while signed in belongs to the account.** Signed in on any browser, the account is
+  the room's admin: it accepts devices, ends the room, and its own devices are accepted at once.
+  The front page lists the account's rooms beside the browser's own.
+- **No expiry.** An account that may hold permanent rooms sees "no expiry" among the lifetimes.
+  Such a room lives until its admin ends it, is never extended, and survives a restart of the
+  server with its relay ports. The other rules are unchanged: 8 members, an accepted member is not
+  removed one by one, and a room that has retired 28 relay ports is spent.
+- **Who may hold one.** Today, admins: the accounts whose numeric GitHub ids are in
+  `ADMIN_GITHUB_IDS`. The id is used because a login can be renamed and taken by someone else. The
+  decision is one function, `RoomService.may_hold_permanent`; a paid plan is meant to be the other
+  way in. An account taken off the list keeps the rooms it has and can end them, but makes no more.
+- **Joining needs no account.** A device opens the link and waits for the admin, as before.
+
+What the server sees of a tunnel is unchanged: it is still a blind forwarder and holds no key.
+
+To turn the login on, register an OAuth app at GitHub (Settings, Developer settings, OAuth Apps)
+with the callback `<PUBLIC_URL>/auth/github/callback` (production:
+`https://raubcamaioni.com/microvpn/auth/github/callback`), and set `GITHUB_CLIENT_ID` and
+`GITHUB_CLIENT_SECRET`. An account's numeric id is the `id` field of
+`https://api.github.com/users/<login>`. Without the two settings the app has no login and
+`/auth/*` answers 404.
 
 ## Limits
 
@@ -54,6 +88,9 @@ member sends from, packet sizes and timing. This is stated on the room page.
 | `RELAY_TOTAL_MBPS` | 200 | relay bandwidth for the whole server |
 | `ROOM_LIFETIMES` | `1,4,12,24` | lifetime choices, hours |
 | `RELAY_PORT_RANGE` | `20000-21999` | UDP ports for pair relays |
+| `PERMANENT_ROOMS_PER_ACCOUNT` | 3 | rooms with no expiry one account may hold |
+| `ADMIN_GITHUB_IDS` | none | numeric GitHub ids of the admins, comma-separated |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | none | the GitHub OAuth app; without both there is no login |
 
 A port a pair gave up is not used again while its room lives, because the device that left still
 points at it. A room that has given up 28 ports accepts no more devices, and no room holds more than
@@ -67,10 +104,10 @@ Other settings: `DATABASE` (SQLite path, required), `ROOT_PATH` (URL prefix behi
 
 | Path | Contents |
 |---|---|
-| `server/` | The FastAPI application: settings, `rooms.py` (the rules), `relay.py` (the UDP forwarder), `wgconfig.py`, routes, templates, static assets, tests. |
+| `server/` | The FastAPI application: settings, `rooms.py` (the rules), `accounts.py` and `github.py` (signing in), `relay.py` (the UDP forwarder), `wgconfig.py`, routes, templates, static assets, tests. |
 | `containers/Containerfile` | One file, three stages: `base` (deps), `test` (dev deps, node, sources; runs pytest), `runtime` (the shipped image, non-root). |
 | `deploy/` | Host setup for the production server: the rootless user, systemd user units, the server-side build, the Docker Hub update timer. |
-| `docs/superpowers/` | The design spec and the implementation plan. |
+| `docs/superpowers/` | The design specs and the implementation plans. |
 | `.github/workflows/` | Tests and builds on every push; publishes (and so deploys) on a release tag. |
 
 ## Running it
@@ -124,4 +161,4 @@ ssh root@<host> 'sudo -iu microvpn /home/microvpn/microvpn/build-on-server.sh <r
 ## Out of scope, for now
 
 A companion app for one-click open, direct peer-to-peer with hole punching (the relay here is the
-fallback that design needs), internet egress, IPv6, accounts, proof-of-work.
+fallback that design needs), internet egress, IPv6, a paid plan for permanent rooms, proof-of-work.
