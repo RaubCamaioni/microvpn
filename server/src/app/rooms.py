@@ -19,7 +19,7 @@ from sqlmodel import Session, delete, select
 
 from app import keys
 from app.relay import MemberStats
-from app.models import Member, Pair, RetiredPort, Room, Visitor, utcnow
+from app.models import PERMANENT_EXPIRES, Account, Member, Pair, RetiredPort, Room, Visitor, utcnow
 
 VISITOR_COOKIE_DAYS = 30
 VISITOR_FORGET_DAYS = 60
@@ -79,6 +79,18 @@ class RoomSpent(RoomError):
 
 class Unauthorized(RoomError):
     status, detail = 401, "bad or missing token"
+
+
+class SignInRequired(RoomError):
+    status, detail = 401, "sign in to make a room with no expiry"
+
+
+class NotEntitled(RoomError):
+    status, detail = 403, "this account may not hold rooms with no expiry"
+
+
+class TooManyPermanent(RoomError):
+    status, detail = 409, "this account has reached its limit of rooms with no expiry"
 
 
 class MemberNotFound(RoomError):
@@ -144,6 +156,7 @@ class MyRoom:
     is_admin: bool
     devices: list[str]  # the names this browser joined as
     lifetime_hours: int = 1
+    permanent: bool = False  # no expiry: expires_at is PERMANENT_EXPIRES
 
 
 @dataclass(frozen=True)
@@ -153,6 +166,7 @@ class RoomView:
     expires_at: datetime
     max_members: int
     members: list[MemberPublic]
+    permanent: bool = False
 
 
 @dataclass(frozen=True)
@@ -216,51 +230,74 @@ class RoomService:
         s.add(row)
         return row.id
 
-    def rooms_of_visitor(self, visitor_id: str) -> list[MyRoom]:
-        """Live rooms this browser created or joined, newest first."""
-        if not visitor_id:
+    def rooms_of_visitor(self, visitor_id: str, account_id: int | None = None) -> list[MyRoom]:
+        """Live rooms this browser created or joined, and those of the signed-in account, newest first."""
+        if not visitor_id and account_id is None:
             return []
         now = self.now()
         with self._session() as s:
-            created = {r.id: r for r in s.exec(select(Room).where(Room.visitor_id == visitor_id, Room.expires_at > now)).all()}
-            joined = s.exec(
-                select(Member, Room)
-                .join(Room, Room.id == Member.room_id)
-                .where(Member.visitor_id == visitor_id, Room.expires_at > now)
-            ).all()
+            created: dict[str, Room] = {}
+            joined = []
+            if visitor_id:
+                created = {
+                    r.id: r for r in s.exec(select(Room).where(Room.visitor_id == visitor_id, Room.expires_at > now)).all()
+                }
+                joined = s.exec(
+                    select(Member, Room)
+                    .join(Room, Room.id == Member.room_id)
+                    .where(Member.visitor_id == visitor_id, Room.expires_at > now)
+                ).all()
+            if account_id is not None:
+                for r in s.exec(select(Room).where(Room.account_id == account_id, Room.expires_at > now)).all():
+                    created[r.id] = r
             rooms: dict[str, Room] = dict(created)
             devices: dict[str, list[str]] = {}
             for member, room in joined:
                 rooms[room.id] = room
                 devices.setdefault(room.id, []).append(member.name)
             return [
-                MyRoom(r.id, r.name, r.expires_at, r.visitor_id == visitor_id, devices.get(r.id, []), r.lifetime_hours)
+                MyRoom(
+                    r.id, r.name, r.expires_at, r.id in created, devices.get(r.id, []), r.lifetime_hours, r.permanent
+                )
                 for r in sorted(rooms.values(), key=lambda r: r.created_at, reverse=True)
             ]
 
-    def is_admin(self, room_id: str, visitor_id: str) -> bool:
-        if not visitor_id or not keys.is_room_id(room_id):
+    def is_admin(self, room_id: str, visitor_id: str, account_id: int | None = None) -> bool:
+        if not keys.is_room_id(room_id):
             return False
         with self._session() as s:
             room = s.get(Room, room_id)
-            return room is not None and room.visitor_id == visitor_id
+            return room is not None and self._is_admin_of(room, None, visitor_id, account_id)
+
+    def may_hold_permanent(self, account: Account | None) -> bool:
+        """Who may make a room with no expiry: an admin. A paid plan is the other way in, when it exists."""
+        return account is not None and account.github_id in self.settings.ADMIN_GITHUB_IDS
 
     # -- rooms --------------------------------------------------------------------------------
 
     def create_room(
         self,
         name: str | None,
-        lifetime_hours: int,
+        lifetime_hours: int | None,
         client_ip: str,
         visitor_id: str = "",
         visitor_token: str | None = None,
+        account: Account | None = None,
+        permanent: bool = False,
     ) -> Room:
         """`visitor_id` is the creating browser when it is known; for one that is not, `visitor_token`
-        is the cookie it is about to get, and the browser is recorded with the room."""
+        is the cookie it is about to get, and the browser is recorded with the room. `account` is who is
+        signed in, if anyone: the room is theirs from any browser. A `permanent` room has no expiry and
+        no lifetime, and only an account that may hold one can make it."""
         clean = keys.clean_room_name(name)
         if clean is None:
             raise Invalid(f"room name: up to {keys.ROOM_NAME_MAX} printable characters")
-        if lifetime_hours not in self.settings.ROOM_LIFETIMES:
+        if permanent:
+            if account is None:
+                raise SignInRequired()
+            if not self.may_hold_permanent(account):
+                raise NotEntitled()
+        elif lifetime_hours not in self.settings.ROOM_LIFETIMES:
             choices = ", ".join(str(h) for h in self.settings.ROOM_LIFETIMES)
             raise Invalid(f"lifetime must be one of {choices} hours")
         now = self.now()
@@ -269,6 +306,10 @@ class RoomService:
             live = s.exec(select(Room).where(Room.expires_at > now)).all()
             if len(live) >= self.settings.ROOM_MAX_LIVE:
                 raise TooManyRooms()
+            if permanent:
+                held = sum(1 for r in live if r.permanent and r.account_id == account.id)
+                if held >= self.settings.PERMANENT_ROOMS_PER_ACCOUNT:
+                    raise TooManyPermanent()
             if not visitor_id and visitor_token:
                 visitor_id = self._new_visitor(s, visitor_token, client_ip, now)
             room = Room(
@@ -276,10 +317,12 @@ class RoomService:
                 name=clean,
                 subnet=self._free_subnet({r.subnet for r in live}),
                 created_at=now,
-                expires_at=now + timedelta(hours=lifetime_hours),
+                expires_at=PERMANENT_EXPIRES if permanent else now + timedelta(hours=lifetime_hours),
                 owner_token=keys.new_token(),
                 visitor_id=visitor_id or "",
-                lifetime_hours=lifetime_hours,
+                lifetime_hours=0 if permanent else lifetime_hours,
+                account_id=account.id if account is not None else None,
+                permanent=permanent,
             )
             s.add(room)
             s.commit()
@@ -337,12 +380,23 @@ class RoomService:
                 )
                 for m in members
             ],
+            permanent=room.permanent,
         )
 
-    def extend(self, room_id: str, owner_token: str | None, lifetime_hours: int | None, visitor_id: str = "") -> datetime:
-        """Start the room's lifetime again from now: its own, or a chosen one. Admin only."""
+    def extend(
+        self,
+        room_id: str,
+        owner_token: str | None,
+        lifetime_hours: int | None,
+        visitor_id: str = "",
+        account_id: int | None = None,
+    ) -> datetime:
+        """Start the room's lifetime again from now: its own, or a chosen one. Admin only. A room with
+        no expiry has no lifetime to start again."""
         with self._session() as s:
-            room = self._admin_room(s, room_id, owner_token, visitor_id)
+            room = self._admin_room(s, room_id, owner_token, visitor_id, account_id)
+            if room.permanent:
+                raise Invalid("a room with no expiry is not extended")
             hours = lifetime_hours if lifetime_hours is not None else room.lifetime_hours
             if hours not in self.settings.ROOM_LIFETIMES:
                 choices = ", ".join(str(h) for h in self.settings.ROOM_LIFETIMES)
@@ -353,18 +407,22 @@ class RoomService:
             s.commit()
             return room.expires_at
 
-    def end_room(self, room_id: str, owner_token: str | None, visitor_id: str = "") -> None:
+    def end_room(
+        self, room_id: str, owner_token: str | None, visitor_id: str = "", account_id: int | None = None
+    ) -> None:
         with self._session() as s:
-            room = self._admin_room(s, room_id, owner_token, visitor_id)
+            room = self._admin_room(s, room_id, owner_token, visitor_id, account_id)
             self._delete_room(s, room)
             s.commit()
 
-    # -- the admin: the room's creator, by owner token or by the creating browser's cookie ----------
+    # -- the admin: the room's creator, by owner token, the creating browser's cookie, or its account
 
-    def admin_view(self, room_id: str, owner_token: str | None, visitor_id: str = "") -> AdminView:
+    def admin_view(
+        self, room_id: str, owner_token: str | None, visitor_id: str = "", account_id: int | None = None
+    ) -> AdminView:
         """Every device of the room with where it joined from: only the admin sees this."""
         with self._session() as s:
-            room = self._admin_room(s, room_id, owner_token, visitor_id)
+            room = self._admin_room(s, room_id, owner_token, visitor_id, account_id)
             return AdminView(
                 members=[
                     AdminMemberView(m.id, m.name, m.address, m.public_key, m.approved, m.joined_ip, m.location, m.created_at)
@@ -372,21 +430,25 @@ class RoomService:
                 ]
             )
 
-    async def approve(self, room_id: str, owner_token: str | None, member_id: int, visitor_id: str = "") -> None:
+    async def approve(
+        self, room_id: str, owner_token: str | None, member_id: int, visitor_id: str = "", account_id: int | None = None
+    ) -> None:
         """Accept a pending device: it gets a pair, and a relay port, with every accepted member."""
         with self._session() as s:
-            room = self._admin_room(s, room_id, owner_token, visitor_id)
+            room = self._admin_room(s, room_id, owner_token, visitor_id, account_id)
             member = s.get(Member, member_id)
             if member is None or member.room_id != room.id:
                 raise MemberNotFound()
         async with self._join_lock:
             await self._connect_locked(room_id, member_id)
 
-    def remove_member(self, room_id: str, owner_token: str | None, member_id: int, visitor_id: str = "") -> None:
+    def remove_member(
+        self, room_id: str, owner_token: str | None, member_id: int, visitor_id: str = "", account_id: int | None = None
+    ) -> None:
         """Reject a pending device. An accepted member is never kicked one by one: every other member
         would have to re-import to truly drop its key, so the rule is to end the room and make a new one."""
         with self._session() as s:
-            room = self._admin_room(s, room_id, owner_token, visitor_id)
+            room = self._admin_room(s, room_id, owner_token, visitor_id, account_id)
             member = s.get(Member, member_id)
             if member is None or member.room_id != room.id:
                 raise MemberNotFound()
@@ -445,9 +507,11 @@ class RoomService:
         client_ip: str = "",
         visitor_id: str = "",
         visitor_token: str | None = None,
+        account_id: int | None = None,
     ) -> Member:
         """Add a device to the room. It waits for the admin unless the join comes from the admin (the
-        owner token, or the creating browser's cookie), in which case it is accepted at once. The
+        owner token, the creating browser's cookie, or the account the room belongs to), in which case
+        it is accepted at once. The
         address it joined from and its approximate location are kept for the admin's decision. A
         browser that is not known yet (no `visitor_id`) is recorded under `visitor_token`, its new cookie."""
         clean = keys.clean_device_name(name)
@@ -458,11 +522,11 @@ class RoomService:
         async with self._join_lock:
             with self._session() as s:
                 if owner_token is not None:
-                    room = self._admin_room(s, room_id, owner_token, visitor_id)
+                    room = self._admin_room(s, room_id, owner_token, visitor_id, account_id)
                     as_admin = True
                 else:
                     room = self._live_room(s, room_id)
-                    as_admin = bool(visitor_id) and room.visitor_id == visitor_id
+                    as_admin = self._is_admin_of(room, None, visitor_id, account_id)
                 members = self._members(s, room)
                 if len(members) >= self.settings.ROOM_MAX_MEMBERS:  # pending devices hold a place too
                     raise RoomFull()
@@ -603,14 +667,23 @@ class RoomService:
             raise RoomGone()
         return room
 
-    def _admin_room(self, s: Session, room_id: str, owner_token: str | None, visitor_id: str = "") -> Room:
-        """The room, if the caller is its admin: the owner token, or the cookie of the browser that created it."""
+    def _admin_room(
+        self, s: Session, room_id: str, owner_token: str | None, visitor_id: str = "", account_id: int | None = None
+    ) -> Room:
+        """The room, if the caller is its admin (see _is_admin_of)."""
         room = self._live_room(s, room_id)
-        by_token = owner_token is not None and hmac.compare_digest(room.owner_token, owner_token)
-        by_cookie = bool(visitor_id) and bool(room.visitor_id) and room.visitor_id == visitor_id
-        if not (by_token or by_cookie):
+        if not self._is_admin_of(room, owner_token, visitor_id, account_id):
             raise Unauthorized()
         return room
+
+    @staticmethod
+    def _is_admin_of(room: Room, owner_token: str | None, visitor_id: str, account_id: int | None) -> bool:
+        """A room's admin is whoever holds its owner token, the browser that created it (by its cookie),
+        or the signed-in account it was created under, from any browser."""
+        by_token = owner_token is not None and hmac.compare_digest(room.owner_token.encode(), owner_token.encode())
+        by_cookie = bool(visitor_id) and bool(room.visitor_id) and room.visitor_id == visitor_id
+        by_account = account_id is not None and room.account_id is not None and room.account_id == account_id
+        return by_token or by_cookie or by_account
 
     @staticmethod
     def _members(s: Session, room: Room) -> list[Member]:
