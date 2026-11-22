@@ -113,3 +113,64 @@ def test_extend_endpoint(client):
     r2 = client.post(f"/r/{room['id']}/extend", json={"lifetime_hours": 1}, headers=owner)
     assert r2.status_code == 200 and r2.json()["expires_at"] < r.json()["expires_at"]
     assert client.get(f"/r/{room['id']}/state").json()["expires_at"] == r2.json()["expires_at"]
+
+
+# -- accounts: rooms with no expiry, and the account as a room's admin ----------------------------
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from tests.conftest import sign_in  # noqa: E402
+
+
+def test_permanent_room_over_the_api(auth_client):
+    body = {"name": "lab", "permanent": True}
+    assert auth_client.post("/rooms", json=body).status_code == 401
+    sign_in(auth_client, 8, "stranger")
+    assert auth_client.post("/rooms", json=body).status_code == 403
+    auth_client.post("/auth/logout")
+    assert auth_client.post("/rooms", json=body).status_code == 401
+    sign_in(auth_client, 7, "raub")
+    r = auth_client.post("/rooms", json=body)
+    assert r.status_code == 201 and r.json()["permanent"] is True and r.json()["expires_at"].startswith("9999-12-31")
+    rid = r.json()["id"]
+    assert auth_client.get(f"/r/{rid}/state").json()["permanent"] is True
+    assert auth_client.post(f"/r/{rid}/extend", json={}).status_code == 400
+    timed = auth_client.post("/rooms", json={"name": "", "lifetime_hours": 1}).json()
+    assert timed["permanent"] is False and auth_client.get(f"/r/{timed['id']}/state").json()["permanent"] is False
+
+
+def test_account_administers_from_a_fresh_browser(auth_app):
+    with TestClient(auth_app) as home, TestClient(auth_app) as phone:
+        sign_in(home, 7, "raub")
+        rid = home.post("/rooms", json={"name": "lab", "permanent": True}, headers={"X-Real-IP": "1.1.1.1"}).json()["id"]
+        away = {"X-Real-IP": "2.2.2.2"}
+        assert phone.get(f"/r/{rid}/admin", headers=away).status_code == 401
+        waiting = phone.post(f"/r/{rid}/members", json={"name": "phone", "public_key": KEY(1)}, headers=away).json()
+        assert waiting["approved"] is False
+        sign_in(phone, 7, "raub")
+        assert phone.get(f"/r/{rid}/admin", headers=away).status_code == 200
+        mine = phone.post(f"/r/{rid}/members", json={"name": "pc", "public_key": KEY(2)}, headers=away).json()
+        assert mine["approved"] is True
+        member_id = phone.get(f"/r/{rid}/admin", headers=away).json()["members"][0]["id"]
+        assert phone.post(f"/r/{rid}/members/{member_id}/approve", headers=away).status_code == 204
+        assert phone.delete(f"/r/{rid}", headers=away).status_code == 204
+
+
+def test_another_account_is_not_the_admin(auth_app):
+    with TestClient(auth_app) as owner, TestClient(auth_app) as other:
+        sign_in(owner, 7, "raub")
+        rid = owner.post("/rooms", json={"name": "lab", "permanent": True}).json()["id"]
+        sign_in(other, 8, "stranger")
+        for call in (
+            lambda: other.get(f"/r/{rid}/admin"),
+            lambda: other.delete(f"/r/{rid}"),
+            lambda: other.post(f"/r/{rid}/extend", json={}),
+        ):
+            assert call().status_code == 401
+        assert other.post(f"/r/{rid}/members", json={"name": "x", "public_key": KEY(3)}).json()["approved"] is False
+
+
+def test_room_without_lifetime_or_permanent_is_400(client):
+    assert client.post("/rooms", json={"name": ""}).status_code == 400
+    # the app has no login here: nobody can be signed in, so a permanent room is refused as signed out
+    assert client.post("/rooms", json={"name": "", "permanent": True}).status_code == 401

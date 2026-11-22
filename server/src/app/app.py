@@ -10,11 +10,13 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers, MutableHeaders
 
+from app.accounts import AccountService, session_cookie
 from app.geo import Geo
+from app.github import HttpGitHub
 from app.models import create_db_and_tables, make_engine
 from app.relay import Relay
 from app.rooms import VISITOR_COOKIE_DAYS, RoomError, RoomService
-from app.routes import api, pages
+from app.routes import api, auth, pages
 from app.settings import Settings
 from app.templating import WEBAPP
 
@@ -66,6 +68,49 @@ class VisitorMiddleware:
         await self.app(scope, receive, send_with_cookie)
 
 
+class SessionCookieMiddleware:
+    """A session in use keeps its cookie: when a request renewed its session (app.accounts.current_account
+    leaves the token in `request.state.session_refresh`), the cookie is set again with a fresh lifetime."""
+
+    def __init__(self, app, settings: Settings):
+        self.app = app
+        self.settings = settings
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        state = scope.setdefault("state", {})
+
+        async def send_with_cookie(message):
+            token = state.get("session_refresh")
+            if message["type"] == "http.response.start" and token:
+                message.setdefault("headers", [])
+                MutableHeaders(raw=message["headers"]).append("set-cookie", session_cookie(self.settings, token))
+            await send(message)
+
+        await self.app(scope, receive, send_with_cookie)
+
+
+class OwnSiteMiddleware:
+    """Only this site's own pages may make a browser act. Cookies name the admin of a room, and a page
+    on another site, or on another name under the same domain, can make a browser send them. Browsers
+    say where a request comes from in Sec-Fetch-Site; anything but a read that comes from elsewhere is
+    refused. A client that is no browser sends no such header and holds no one's cookies."""
+
+    SAFE = {"GET", "HEAD", "OPTIONS"}
+    ELSEWHERE = {"cross-site", "same-site"}
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] not in self.SAFE:
+            if (Headers(scope=scope).get("sec-fetch-site") or "").lower() in self.ELSEWHERE:
+                response = JSONResponse({"detail": "request from another site refused"}, status_code=403)
+                return await response(scope, receive, send)
+        await self.app(scope, receive, send)
+
+
 class NoStoreMiddleware:
     """Every response is `Cache-Control: no-store`: room state changes by the second and nothing is
     worth caching. Pure ASGI so streaming responses are untouched."""
@@ -86,11 +131,12 @@ class NoStoreMiddleware:
         await self.app(scope, receive, send_no_store)
 
 
-def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
+def create_app(settings: Settings, relay=None, locate=None, github=None) -> FastAPI:
     engine = make_engine(settings.DATABASE)
     relay = relay if relay is not None else Relay(settings)
     locate = locate if locate is not None else Geo(settings.GEOIP_DB).locate
     rooms = RoomService(engine, settings, relay, locate=locate)
+    accounts = AccountService(engine, settings)
 
     async def sweeper(app: FastAPI):
         """Every SWEEP_SECONDS: end the rooms whose time is up. An error is logged, never fatal."""
@@ -98,6 +144,7 @@ def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
             await asyncio.sleep(settings.SWEEP_SECONDS)
             try:
                 removed = await asyncio.to_thread(rooms.sweep)
+                await asyncio.to_thread(accounts.sweep)
                 if removed:
                     logger.info("sweep: ended %d expired room(s)", removed)
             except Exception:  # noqa: BLE001 - the sweeper must survive anything
@@ -123,14 +170,20 @@ def create_app(settings: Settings, relay=None, locate=None) -> FastAPI:
     app.state.relay = relay
     app.state.engine = engine
     app.state.rooms = rooms
+    app.state.accounts = accounts
+    app.state.github = github if github is not None else HttpGitHub(settings)
 
     @app.exception_handler(RoomError)
     async def room_error(request: Request, exc: RoomError):
         return JSONResponse({"detail": exc.detail}, status_code=exc.status)
 
+    app.add_middleware(SessionCookieMiddleware, settings=settings)
+    app.add_middleware(OwnSiteMiddleware)
     app.add_middleware(NoStoreMiddleware)
     app.add_middleware(VisitorMiddleware, rooms=rooms, settings=settings)
     app.mount("/static", StaticFiles(directory=WEBAPP / "static"), name="static")
     app.include_router(api.router)
+    if settings.github_enabled:  # without the OAuth app there is no login: these paths answer 404
+        app.include_router(auth.router)
     app.include_router(pages.router)
     return app

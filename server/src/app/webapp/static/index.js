@@ -9,7 +9,10 @@
     event.preventDefault();
     error.hidden = true;
     var data = new FormData(form);
-    var body = { name: data.get("name") || null, lifetime_hours: Number(data.get("lifetime")) };
+    // "no expiry" is offered only to an account that may hold such a room; the server decides again
+    var body = data.get("lifetime") === "permanent"
+      ? { name: data.get("name") || null, permanent: true }
+      : { name: data.get("name") || null, lifetime_hours: Number(data.get("lifetime")) };
     var res, json;
     try {
       res = await fetch(root + "/rooms", {
@@ -28,7 +31,10 @@
       error.hidden = false;
       return;
     }
-    try { localStorage.setItem("microvpn:" + json.id + ":owner", json.owner_token); } catch (e) { /* private mode */ }
+    // a room made while signed in has no owner token: the account is its admin
+    if (json.owner_token) {
+      try { localStorage.setItem("microvpn:" + json.id + ":owner", json.owner_token); } catch (e) { /* private mode */ }
+    }
     location.reload();  // the room appears in the tree; the reader opens it when ready
   });
 

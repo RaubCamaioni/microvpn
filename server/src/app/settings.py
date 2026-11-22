@@ -29,6 +29,16 @@ class Settings:
     FORWARDED_ALLOW_IPS: str = "172.18.0.0/16"
     # the DB-IP city database the image bundles; blank locations when the file is missing
     GEOIP_DB: str = "/usr/share/dbip/dbip-city-lite.mmdb"
+    # the GitHub OAuth app people sign in through; without both, the app has no login
+    GITHUB_CLIENT_ID: str = ""
+    GITHUB_CLIENT_SECRET: str = ""
+    # GitHub's numeric account ids (not logins: a login can be renamed and taken by someone else)
+    ADMIN_GITHUB_IDS: frozenset[int] = frozenset()
+    PERMANENT_ROOMS_PER_ACCOUNT: int = 3
+
+    @property
+    def github_enabled(self) -> bool:
+        return bool(self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
 
     @property
     def http_host(self) -> str:
@@ -52,15 +62,18 @@ class Settings:
                     raise ValueError(f"Malformed environment variable {name}={env[name]!r}: {e}") from e
 
         take("ROOT_PATH", lambda v: v.rstrip("/"))
-        for name in ("PUBLIC_URL", "RELAY_HOST", "RELAY_BIND", "FORWARDED_ALLOW_IPS", "GEOIP_DB"):
+        for name in ("PUBLIC_URL", "RELAY_HOST", "RELAY_BIND", "FORWARDED_ALLOW_IPS", "GEOIP_DB", "GITHUB_CLIENT_ID",
+                     "GITHUB_CLIENT_SECRET"):
             take(name, str)
         take("HTTP_BIND", _parse_bind)
         take("RELAY_PORT_RANGE", _parse_port_range)
-        for name in ("ROOM_MAX_MEMBERS", "ROOM_MAX_LIVE", "ROOM_CREATE_PER_IP_PER_HOUR", "ROOM_JOIN_PER_IP_PER_HOUR"):
+        for name in ("ROOM_MAX_MEMBERS", "ROOM_MAX_LIVE", "ROOM_CREATE_PER_IP_PER_HOUR", "ROOM_JOIN_PER_IP_PER_HOUR",
+                     "PERMANENT_ROOMS_PER_ACCOUNT"):
             take(name, _parse_positive_int)
         for name in ("ROOM_MBPS", "RELAY_TOTAL_MBPS", "SWEEP_SECONDS"):
             take(name, _parse_positive_float)
         take("ROOM_LIFETIMES", _parse_lifetimes)
+        take("ADMIN_GITHUB_IDS", _parse_ids)
         return cls(**values)
 
 
@@ -100,6 +113,10 @@ def _parse_lifetimes(v: str) -> tuple[int, ...]:
     if not hours:
         raise ValueError("expected a comma-separated list of hours")
     return hours
+
+
+def _parse_ids(v: str) -> frozenset[int]:
+    return frozenset(_parse_positive_int(part.strip()) for part in v.split(",") if part.strip())
 
 
 def settings_from_os() -> Settings:

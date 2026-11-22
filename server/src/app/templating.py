@@ -1,4 +1,4 @@
-"""Jinja templates with the globals every page uses: root_path, the release version and the commit."""
+"""Jinja templates with what every page uses: root_path, who is signed in, the release version and the commit."""
 
 import hashlib
 import os
@@ -14,7 +14,22 @@ def _root_path(request) -> dict:
     return {"root_path": request.scope.get("root_path") or ""}
 
 
-TEMPLATES = Jinja2Templates(directory=WEBAPP / "templates", context_processors=[_root_path])
+def _account(request) -> dict:
+    """Every template gets who is signed in (`account`, or None), whether the app has a login at all,
+    and whether this account may make a room with no expiry."""
+    from app.accounts import current_account
+
+    state = request.app.state
+    account = current_account(request)
+    rooms = getattr(state, "rooms", None)
+    return {
+        "account": account,
+        "login_enabled": state.settings.github_enabled,
+        "may_hold_permanent": rooms is not None and rooms.may_hold_permanent(account),
+    }
+
+
+TEMPLATES = Jinja2Templates(directory=WEBAPP / "templates", context_processors=[_root_path, _account])
 
 
 def _static_version() -> str:

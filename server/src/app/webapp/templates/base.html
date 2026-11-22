@@ -13,11 +13,14 @@
 <body data-root-path="{{ root_path }}">
   <header>
     {# cwd as /home/<app>/...: "home" is the site's landing page (outside the mount), "<app>" this app's front page #}
-    <span class="prompt"><span class="dim">guest@microvpn</span>:/<a href="/">home</a>/<a href="{{ root_path }}/">{{ root_path.strip('/') or 'microvpn' }}</a>{{ cwd | default('') }}<span class="dim"> $</span></span>
+    <span class="prompt"><span class="dim">{{ account.login if account else 'guest' }}@microvpn</span>:/<a href="/">home</a>/<a href="{{ root_path }}/">{{ root_path.strip('/') or 'microvpn' }}</a>{{ cwd | default('') }}<span class="dim"> $</span></span>
     <nav>
       {# the bracket for the current page is inverted, as in the other apps #}
       <a href="{{ root_path }}/"{% if request.url.path[root_path|length:] in ('', '/') %} class="on"{% endif %}>[home]</a>
       <a href="https://github.com/RaubCamaioni/microvpn">[github]</a>
+      {# the login exists only when the server has a GitHub OAuth app configured #}
+      {% if account %}<a href="#" id="sign-out" title="signed in as {{ account.login }}">[sign out]</a>
+      {% elif login_enabled %}<a href="{{ root_path }}/auth/github">[sign in]</a>{% endif %}
     </nav>
   </header>
   <main {% block main_attrs %}{% endblock %}>
@@ -26,6 +29,7 @@
   {# the release and commit this page was built from, pinned bottom-right #}
   <a href="https://github.com/RaubCamaioni/microvpn/commit/{{ commit_sha }}" id="version-tag"
      title="site version: release and git commit">v{{ app_version }}+{{ commit_sha[:7] }}</a>
+  {% if account %}<script src="{{ root_path }}/static/account.js?v={{ static_version }}"></script>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

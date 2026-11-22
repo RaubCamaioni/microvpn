@@ -3,12 +3,14 @@
 {% block head %}<meta name="robots" content="noindex">{% endblock %}
 {% block main_attrs %}id="room" data-room-id="{{ room.id }}" data-root-path="{{ root_path }}" data-short="{{ room.id[:8] }}"
       data-expires-at="{{ room.expires_at.isoformat() }}" data-max-members="{{ room.max_members }}"
-      data-admin="{{ '1' if is_admin else '0' }}"{% endblock %}
+      data-admin="{{ '1' if is_admin else '0' }}" data-permanent="{{ '1' if room.permanent else '0' }}"{% endblock %}
 {% block content %}
 <section id="room-header">
   <p class="headline"><span class="title">{{ room.name or 'room ' ~ room.id[:8] }}</span>
-     <span class="dim">· <span id="expires">expires in …</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members</span>
+     <span class="dim">· <span id="expires">{{ 'no expiry' if room.permanent else 'expires in …' }}</span> · <span id="member-count">{{ room.members | length }}</span> of {{ room.max_members }} members</span>
      <span id="admin-bar" {% if not is_admin %}hidden{% endif %}><span class="badge">[ADMIN]</span>
+       {# a room with no expiry has no lifetime to start again: only [end room] #}
+       {% if room.permanent %}<a href="#" id="end-room">[end room]</a>{% else %}
        <form id="extend-form" autocomplete="off">
          <label>lifetime
            <select name="lifetime">
@@ -17,7 +19,7 @@
          </label>
          <button type="submit" title="start the lifetime again from now">[extend]</button>
          <a href="#" id="end-room">[end room]</a>
-       </form>
+       </form>{% endif %}
      </span></p>
   <p class="link"><code id="room-link">{{ settings.PUBLIC_URL }}/r/{{ room.id }}</code>
      <a href="#" id="copy-link">[copy link]</a> <a href="#" id="link-qr">[QR]</a></p>

@@ -11,11 +11,12 @@ dependencies = [
     "fastapi[standard]>=0.115",
     "sqlmodel>=0.0.48",  # timezone-aware datetimes (app.models.utcnow) need 0.0.48+
     "maxminddb>=2.6",
+    "httpx>=0.27",  # the two GitHub calls of a sign-in
     "uvloop>=0.21; sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
 [project.scripts]
 microvpn = "app.runner:runner"

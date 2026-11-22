@@ -67,3 +67,48 @@ def test_a_public_key_or_address_cannot_repeat_within_a_room(tmp_path):
         s.add(Member(room_id="b" * 26, name="m", public_key="k2", address="10.1.3.2", token="t3", created_at=now))
         with pytest.raises(IntegrityError):
             s.commit()
+
+
+def test_old_database_gains_account_columns(tmp_path):
+    """A deploy over the previous release's database: the room table gets the new columns, old rooms
+    are not permanent and belong to no account, and the account tables exist."""
+    from sqlalchemy import text
+
+    from app.models import Account
+
+    engine = make_engine(str(tmp_path / "old.db"))
+    with engine.begin() as c:
+        c.execute(
+            text(
+                "CREATE TABLE room (id VARCHAR PRIMARY KEY, name VARCHAR, subnet VARCHAR, created_at DATETIME,"
+                " expires_at DATETIME, owner_token VARCHAR, visitor_id VARCHAR NOT NULL DEFAULT '',"
+                " lifetime_hours INTEGER NOT NULL DEFAULT 1)"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO room (id, name, subnet, created_at, expires_at, owner_token)"
+                " VALUES ('r', '', '10.1.1.0/24', '2026-01-01 00:00:00+00:00', '2026-01-01 01:00:00+00:00', 't')"
+            )
+        )
+    create_db_and_tables(engine)
+    with Session(engine) as s:
+        room = s.get(Room, "r")
+        assert room.permanent is False and room.account_id is None
+        s.add(Account(github_id=1, login="a", created_at=utcnow(), last_login=utcnow()))
+        s.commit()
+        assert s.exec(select(Account)).one().github_id == 1
+
+
+def test_permanent_expiry_round_trips(tmp_path):
+    from app.models import PERMANENT_EXPIRES
+
+    engine = make_engine(str(tmp_path / "t.db"))
+    create_db_and_tables(engine)
+    with Session(engine) as s:
+        s.add(Room(id="p", subnet="10.1.2.0/24", created_at=utcnow(), expires_at=PERMANENT_EXPIRES, owner_token="o", permanent=True))
+        s.commit()
+    with Session(engine) as s:
+        room = s.get(Room, "p")
+        assert room.permanent is True and room.expires_at == PERMANENT_EXPIRES and room.expires_at > utcnow()
+        assert s.exec(select(Room).where(Room.expires_at > utcnow())).one().id == "p"
