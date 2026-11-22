@@ -437,7 +437,9 @@
 
   // -- countdown and extending -----------------------------------------------------------------
   var expiresAt = new Date(main.dataset.expiresAt);
+  var permanent = main.dataset.permanent === "1";  // no expiry: nothing counts down, nothing to extend
   function tick() {
+    if (permanent) { el.expires.textContent = "no expiry"; return; }
     var left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
     if (left === 0) { el.expires.textContent = "expired"; return; }
     var h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
@@ -455,7 +457,7 @@
       tick();
     }
   }
-  el["extend-form"].addEventListener("submit", function (event) {
+  if (el["extend-form"]) el["extend-form"].addEventListener("submit", function (event) {
     event.preventDefault();
     extend(Number(new FormData(el["extend-form"]).get("lifetime")));
   });

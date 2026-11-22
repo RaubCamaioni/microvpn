@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from app.accounts import current_account
 from app.rooms import RoomGone
 from app.templating import TEMPLATES
 
@@ -15,7 +16,8 @@ def visitor(request: Request) -> str:
 
 @router.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    my_rooms = request.app.state.rooms.rooms_of_visitor(visitor(request))
+    account = current_account(request)
+    my_rooms = request.app.state.rooms.rooms_of_visitor(visitor(request), account.id if account else None)
     context = {"settings": request.app.state.settings, "my_rooms": my_rooms}
     return TEMPLATES.TemplateResponse(request, "index.html", context)
 
@@ -23,6 +25,7 @@ def index(request: Request):
 @router.get("/r/{room_id}", response_class=HTMLResponse)
 def room_page(room_id: str, request: Request):
     service = request.app.state.rooms
+    account = current_account(request)
     try:
         room = service.room_view(room_id)
     except RoomGone:
@@ -31,6 +34,6 @@ def room_page(room_id: str, request: Request):
         "room": room,
         "settings": request.app.state.settings,
         "cwd": f"/r/{room.id[:8]}",
-        "is_admin": service.is_admin(room_id, visitor(request)),
+        "is_admin": service.is_admin(room_id, visitor(request), account.id if account else None),
     }
     return TEMPLATES.TemplateResponse(request, "room.html", context)

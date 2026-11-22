@@ -9,7 +9,10 @@
     event.preventDefault();
     error.hidden = true;
     var data = new FormData(form);
-    var body = { name: data.get("name") || null, lifetime_hours: Number(data.get("lifetime")) };
+    // "no expiry" is offered only to an account that may hold such a room; the server decides again
+    var body = data.get("lifetime") === "permanent"
+      ? { name: data.get("name") || null, permanent: true }
+      : { name: data.get("name") || null, lifetime_hours: Number(data.get("lifetime")) };
     var res, json;
     try {
       res = await fetch(root + "/rooms", {

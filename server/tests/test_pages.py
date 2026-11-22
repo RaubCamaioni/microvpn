@@ -153,3 +153,63 @@ def test_vendored_libraries_are_present():
     assert "nacl" in nacl and "box" in nacl and len(nacl) > 20000
     qr = (STATIC / "vendor/qrcode.js").read_text(encoding="utf-8")
     assert "QR Code Generator for JavaScript" in qr[:2000] and "createSvgTag" in qr
+
+
+# -- accounts on the pages ----------------------------------------------------------------------
+
+from tests.conftest import sign_in  # noqa: E402
+
+
+def test_front_page_login_and_no_expiry_option(client, auth_client):
+    plain = client.get("/").text  # login not configured: the page is as it always was
+    assert "[sign in]" not in plain and "[sign out]" not in plain and "guest@microvpn" in plain
+    page = auth_client.get("/").text
+    assert '<a href="/auth/github">[sign in]</a>' in page and "no expiry" not in page and "guest@microvpn" in page
+    sign_in(auth_client, 8, "stranger")
+    page = auth_client.get("/").text
+    assert "stranger@microvpn" in page and "[sign out]" in page and "[sign in]" not in page and "no expiry" not in page
+    auth_client.post("/auth/logout")
+    assert "guest@microvpn" in auth_client.get("/").text
+    sign_in(auth_client, 7, "raub")
+    assert '<option value="permanent">no expiry</option>' in auth_client.get("/").text
+
+
+def test_signed_in_pages_follow_the_person_across_addresses(auth_client):
+    sign_in(auth_client, 7, "raub")
+    for ip in ("1.1.1.1", "2.2.2.2"):
+        assert "raub@microvpn" in auth_client.get("/", headers={"X-Real-IP": ip}).text
+
+
+def test_permanent_room_pages(auth_client):
+    sign_in(auth_client, 7, "raub")
+    rid = auth_client.post("/rooms", json={"name": "lab", "permanent": True}).json()["id"]
+    timed = auth_client.post("/rooms", json={"name": "short", "lifetime_hours": 1}).json()["id"]
+    room = auth_client.get(f"/r/{rid}").text
+    assert 'data-permanent="1"' in room and 'id="extend-form"' not in room and 'id="end-room"' in room
+    assert 'data-admin="1"' in room and "no expiry" in room
+    other = auth_client.get(f"/r/{timed}").text
+    assert 'data-permanent="0"' in other and 'id="extend-form"' in other
+    front = auth_client.get("/").text
+    assert f'data-extend="{timed}"' in front and f'data-extend="{rid}"' not in front and f'data-delete="{rid}"' in front
+    assert "no expiry</span>" in front
+
+
+def test_account_rooms_show_on_a_browser_that_never_made_them(auth_app):
+    with TestClient(auth_app) as home, TestClient(auth_app) as phone:
+        sign_in(home, 7, "raub")
+        rid = home.post("/rooms", json={"name": "lab", "permanent": True}).json()["id"]
+        assert rid not in phone.get("/").text
+        sign_in(phone, 7, "raub")
+        assert f'/r/{rid}"' in phone.get("/").text and 'data-admin="1"' in phone.get(f"/r/{rid}").text
+
+
+def test_login_links_carry_the_prefix(tmp_path):
+    from tests.conftest import FakeGitHub, fake_locate, make_settings
+
+    settings = make_settings(
+        DATABASE=str(tmp_path / "p.db"), ROOT_PATH=PREFIX, GITHUB_CLIENT_ID="cid", GITHUB_CLIENT_SECRET="cs"
+    )
+    app = create_app(settings, relay=FakeRelay(), locate=fake_locate, github=FakeGitHub())
+    with TestClient(app, root_path=PREFIX) as c:
+        page = c.get("/").text
+        assert f'href="{PREFIX}/auth/github"' in page and unprefixed(page) == []

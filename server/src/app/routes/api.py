@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from app import keys
+from app.accounts import current_account
 from app.rooms import RoomService, Unauthorized
 
 router = APIRouter()
@@ -13,7 +14,8 @@ router = APIRouter()
 
 class CreateRoom(BaseModel):
     name: str | None = None
-    lifetime_hours: int
+    lifetime_hours: int | None = None  # one of ROOM_LIFETIMES, unless the room is permanent
+    permanent: bool = False  # no expiry: for a signed-in account that may hold such rooms
 
 
 class JoinRoom(BaseModel):
@@ -37,6 +39,12 @@ def client_ip(request: Request) -> str:
 def visitor(request: Request) -> str:
     """The browser behind the request's cookie (set by VisitorMiddleware); "" when it is not known."""
     return getattr(request.state, "visitor_id", "") or ""
+
+
+def account_id(request: Request) -> int | None:
+    """The signed-in account behind the request's session cookie, if any: the admin of its own rooms."""
+    account = current_account(request)
+    return account.id if account is not None else None
 
 
 def new_visitor_token(request: Request) -> str | None:
@@ -76,7 +84,13 @@ def healthz(request: Request):
 def create_room(body: CreateRoom, request: Request):
     token = new_visitor_token(request)
     room = rooms(request).create_room(
-        body.name, body.lifetime_hours, client_ip(request), visitor_id=visitor(request), visitor_token=token
+        body.name,
+        body.lifetime_hours,
+        client_ip(request),
+        visitor_id=visitor(request),
+        visitor_token=token,
+        account=current_account(request),
+        permanent=body.permanent,
     )
     set_visitor_cookie(request, token)
     public_url = request.app.state.settings.PUBLIC_URL.rstrip("/")
@@ -85,6 +99,7 @@ def create_room(body: CreateRoom, request: Request):
         "url": f"{public_url}/r/{room.id}",
         "owner_token": room.owner_token,
         "expires_at": room.expires_at.isoformat(),
+        "permanent": room.permanent,
     }
 
 
@@ -94,6 +109,7 @@ def room_state(room_id: str, request: Request):
     return {
         "name": view.name,
         "expires_at": view.expires_at.isoformat(),
+        "permanent": view.permanent,
         "max_members": view.max_members,
         "members": [asdict(m) for m in view.members],
     }
@@ -101,7 +117,8 @@ def room_state(room_id: str, request: Request):
 
 @router.post("/r/{room_id}/members", status_code=201)
 async def join_room(room_id: str, body: JoinRoom, request: Request):
-    # the admin's own device (owner token, or the creating browser's cookie) is accepted at once; everyone else waits
+    # the admin's own device (owner token, the creating browser's cookie, or the room's account) is accepted at
+    # once; everyone else waits
     token = new_visitor_token(request)
     member = await rooms(request).join(
         room_id,
@@ -111,41 +128,45 @@ async def join_room(room_id: str, body: JoinRoom, request: Request):
         client_ip=client_ip(request),
         visitor_id=visitor(request),
         visitor_token=token,
+        account_id=account_id(request),
     )
     set_visitor_cookie(request, token)
     return {"member_token": member.token, "address": member.address, "approved": member.approved}
 
 
-# -- the admin: owner token in the Authorization header, or the cookie of the browser that created the room
+# -- the admin: owner token in the Authorization header, the cookie of the browser that created the room, or
+# the signed-in account the room belongs to
 
 
 @router.get("/r/{room_id}/admin")
 def admin_view(room_id: str, request: Request):
-    view = rooms(request).admin_view(room_id, bearer_or_none(request), visitor_id=visitor(request))
+    view = rooms(request).admin_view(room_id, bearer_or_none(request), visitor_id=visitor(request), account_id=account_id(request))
     return {"members": [{**asdict(m), "created_at": m.created_at.isoformat()} for m in view.members]}
 
 
 @router.post("/r/{room_id}/members/{member_id}/approve", status_code=204)
 async def approve_member(room_id: str, member_id: int, request: Request):
-    await rooms(request).approve(room_id, bearer_or_none(request), member_id, visitor_id=visitor(request))
+    await rooms(request).approve(room_id, bearer_or_none(request), member_id, visitor_id=visitor(request), account_id=account_id(request))
     return Response(status_code=204)
 
 
 @router.delete("/r/{room_id}/members/{member_id}", status_code=204)
 def remove_member(room_id: str, member_id: int, request: Request):
-    rooms(request).remove_member(room_id, bearer_or_none(request), member_id, visitor_id=visitor(request))
+    rooms(request).remove_member(room_id, bearer_or_none(request), member_id, visitor_id=visitor(request), account_id=account_id(request))
     return Response(status_code=204)
 
 
 @router.post("/r/{room_id}/extend")
 def extend_room(room_id: str, body: ExtendRoom, request: Request):
-    expires_at = rooms(request).extend(room_id, bearer_or_none(request), body.lifetime_hours, visitor_id=visitor(request))
+    expires_at = rooms(request).extend(
+        room_id, bearer_or_none(request), body.lifetime_hours, visitor_id=visitor(request), account_id=account_id(request)
+    )
     return {"expires_at": expires_at.isoformat()}
 
 
 @router.delete("/r/{room_id}", status_code=204)
 def end_room(room_id: str, request: Request):
-    rooms(request).end_room(room_id, bearer_or_none(request), visitor_id=visitor(request))
+    rooms(request).end_room(room_id, bearer_or_none(request), visitor_id=visitor(request), account_id=account_id(request))
     return Response(status_code=204)
 
 
