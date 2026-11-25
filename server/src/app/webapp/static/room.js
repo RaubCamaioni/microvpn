@@ -198,8 +198,9 @@
           text.appendChild(span("waiting for a peer", "dim"));
         } else {
           // handshaking: it reaches the relay but no handshake completes, so its private key does not match this public key
-          var state = m.active ? ["Connected", "ok"] : m.handshaking ? ["Handshaking…", "warn"] : ["Disconnected", "bad"];
-          text.appendChild(span(state[0], state[1]));
+          // not "state": a var of that name would take the place of this function's argument in the whole callback
+          var tunnel = m.active ? ["Connected", "ok"] : m.handshaking ? ["Handshaking…", "warn"] : ["Disconnected", "bad"];
+          text.appendChild(span(tunnel[0], tunnel[1]));
           text.appendChild(span(" · " + formatBytes(m.bytes), "dim"));
         }
       }
