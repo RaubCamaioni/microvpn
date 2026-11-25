@@ -213,3 +213,67 @@ def test_login_links_carry_the_prefix(tmp_path):
     with TestClient(app, root_path=PREFIX) as c:
         page = c.get("/").text
         assert f'href="{PREFIX}/auth/github"' in page and unprefixed(page) == []
+
+# A browser small enough for room.js to start in and draw one poll: elements that remember their children.
+ROOM_JS_HARNESS = r"""
+function element() {
+  var e = { dataset: {}, children: [], style: {}, hidden: false, textContent: "", className: "",
+    classList: { add: function () {}, remove: function () {}, toggle: function () {} },
+    appendChild: function (c) { e.children.push(c); return c; },
+    addEventListener: function () {}, setAttribute: function () {}, querySelector: function () { return element(); },
+    focus: function () {}, remove: function () {} };
+  Object.defineProperty(e, "innerHTML", { set: function () { e.children = []; }, get: function () { return ""; } });
+  return e;
+}
+function text(e) { return e.textContent + e.children.map(text).join(""); }
+var byId = {};
+global.document = { getElementById: function (id) { return byId[id] || (byId[id] = element()); },
+  createElement: element, addEventListener: function () {}, querySelector: function () { return element(); }, body: element() };
+global.window = global; global.location = { origin: "https://vpn.test", pathname: "/r/abc", hostname: "vpn.test" };
+global.navigator = { userAgent: "", platform: "", maxTouchPoints: 0 };
+global.localStorage = { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} };
+global.setInterval = function () { return 0; };
+var room = document.getElementById("room");
+room.dataset = { roomId: "abc", rootPath: "", short: "abc", admin: "1", permanent: "1", expiresAt: "9999-12-31T00:00:00+00:00" };
+var replies = { "/r/abc/state": STATE, "/r/abc/admin": ADMIN };
+global.fetch = function (url) {
+  return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(replies[url]); } });
+};
+process.on("unhandledRejection", function (e) { console.error(e); process.exit(1); });
+require(SCRIPT);
+setTimeout(function () {
+  process.stdout.write(JSON.stringify({
+    members: byId["peer-list"].children.map(text), requests: byId["request-list"].children.map(text) }));
+}, 50);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_room_script_draws_members_and_the_admins_pending_requests(tmp_path):
+    """The room page with members in it: accepted ones with their state, waiting ones as requests to the admin.
+    (A variable named like the function's argument once made the member list throw, and with it everything
+    drawn after it: the admin saw "no pending requests" while devices waited.)"""
+    import json
+
+    def member(i, name, approved, **more):
+        base = {"id": i, "name": name, "address": f"10.1.2.{i + 1}", "public_key": f"key{i}", "approved": approved}
+        return {**base, "active": False, "bytes": 0, "handshaking": False, **more}
+
+    state = {
+        "name": "home",
+        "expires_at": "9999-12-31T00:00:00+00:00",
+        "permanent": True,
+        "max_members": 8,
+        "members": [member(1, "laptop", True, active=True, bytes=2048), member(2, "desk", True), member(3, "phone", False)],
+    }
+    admin = {"members": [{**m, "joined_ip": "192.0.2.7", "location": "", "created_at": "2026-01-01T00:00:00+00:00"} for m in state["members"]]}
+    script = (
+        f"var STATE = {json.dumps(state)}, ADMIN = {json.dumps(admin)}, SCRIPT = {json.dumps(str(STATIC / 'room.js'))};"
+        + ROOM_JS_HARNESS
+    )
+    out = json.loads(subprocess.run(["node", "-e", script], check=True, capture_output=True).stdout)
+    assert len(out["members"]) == 3
+    assert "laptop" in out["members"][0] and "Connected" in out["members"][0] and "2.0 KB" in out["members"][0]
+    assert "desk" in out["members"][1] and "Disconnected" in out["members"][1]
+    assert "phone" in out["members"][2] and "waiting for the admin" in out["members"][2]
+    assert len(out["requests"]) == 1 and "phone" in out["requests"][0] and "[accept]" in out["requests"][0]
